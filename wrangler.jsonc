@@ -1,0 +1,32 @@
+{
+  "name": "etzhayyim-auth",
+  "main": "worker/svelte/.svelte-kit/cloudflare/_worker.js",
+  "compatibility_date": "2025-03-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "routes": [
+    {
+      "pattern": "auth.etzhayyim.com/*",
+      "zone_name": "etzhayyim.com"
+    },
+    {
+      "pattern": "authn.etzhayyim.com/*",
+      "zone_name": "etzhayyim.com"
+    }
+  ],
+  "assets": {
+    "directory": "./worker/svelte/.svelte-kit/cloudflare/client",
+    "binding": "ASSETS",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "none"
+  },
+  "d1_databases": [
+    {
+      "binding": "AUTH_DB",
+      "database_name": "etzhayyim-auth-v2",
+      "database_id": "9b49c788-d4e5-45b2-872a-f737f33f248d"
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

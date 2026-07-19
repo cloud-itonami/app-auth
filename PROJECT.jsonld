@@ -1,0 +1,8 @@
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "auth.etzhayyim.com",
+  "description": "DID-Native Authentication Platform — Clerk replacement with AI Agent-First, WebAuthn/Passkey, AT Protocol session, PoP binding",
+  "applicationCategory": "Security",
+  "url": "https://auth.etzhayyim.com"
+}

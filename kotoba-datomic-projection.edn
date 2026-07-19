@@ -1,0 +1,82 @@
+;; kotoba-datomic-projection manifest for etzhayyim-project-auth
+;;
+;; Per ADR-2605231500, the D1 tables under AUTH_DB / KEYS_DB held by the
+;; auth Worker are a derived read-path projection of canonical state held
+;; elsewhere. They are NOT the system of record.
+;;
+;; Canonical state lives on:
+;;   - com.etzhayyim.encrypted.record envelopes (innerType =
+;;     com.etzhayyim.auth.credential) in the auth tenant PDS (MST).
+;;     XChaCha20-Poly1305 + Signal-wrapped per-recipient keys.
+;;     Per ADR-2605181100.
+;;   - DID Documents (did:web:authn.etzhayyim.com:user:*) published by
+;;     the Worker itself and rebuildable from PDS commit history.
+;;   - Base L2 anchor (MST root commitments) finality.
+;;
+;; This manifest exempts the auth Worker's D1 access from the substrate-
+;; boundary lint rule. The exemption is conditional on the rebuild runbook
+;; below remaining executable.
+
+{:projection/name "auth-worker-d1"
+ :projection/level :l0-projection
+ :projection/rebuild-runbook "MIGRATION-TODO.md#rebuild-from-mst"
+ :projection/adr "2605231500"
+ :projection/kotoba-companion-adr "2605231400"
+ :projection/related-migration "MIGRATION-TODO.md"
+ :projection/owner "auth Worker maintainers"
+ :projection/last-reviewed "2026-05-23"
+
+ ;; Canonical source the projection is rebuildable from. Every D1 row
+ ;; MUST be re-derivable from the encrypted MST records below plus
+ ;; tombstone envelopes for revocation.
+ :projection/source-collections
+ ["com.etzhayyim.encrypted.record"
+  "com.etzhayyim.encrypted.keyWrap"
+  "com.etzhayyim.encrypted.signalIdentity"
+  "com.etzhayyim.encrypted.tombstone"
+  "com.etzhayyim.auth.credential"]
+
+ :projection/tables
+ ["vertex_etzhayyim_auth_account"
+  "vertex_etzhayyim_auth_credential"
+  "vertex_etzhayyim_auth_invite"
+  "vertex_etzhayyim_auth_otp"
+  "edge_etzhayyim_auth_linked"
+  "vertex_etzhayyim_key_signing"
+  "vertex_etzhayyim_key_revoked_session"
+  "vertex_etzhayyim_key_otp"]
+
+ :projection/storage-substrates
+ [{:kind :cloudflare-d1
+   :binding "AUTH_DB"
+   :note "control plane (vertex_etzhayyim_auth_*, edge_etzhayyim_auth_*); rebuildable from MST envelopes"}
+  {:kind :cloudflare-d1
+   :binding "KEYS_DB"
+   :note "key plane (vertex_etzhayyim_key_*); rebuildable from KEK envelope + MST"}
+  {:kind :cloudflare-workers-kv
+   :binding "YATABASE_AUTH_CACHE"
+   :note "hot-path API-key resolution cache (24h TTL); rebuildable from credential envelopes"}]
+
+ ;; Empty D1 + KV. The rebuild runbook subscribes to
+ ;; com.atproto.sync.subscribeRepos for the auth tenant PDS, decrypts each
+ ;; com.etzhayyim.encrypted.record envelope whose innerType is
+ ;; com.etzhayyim.auth.credential, projects the plaintext into the D1 row
+ ;; shape (vertex_etzhayyim_auth_credential / linked / invite / otp), and
+ ;; replays tombstone envelopes as soft-deletes.
+ :projection/rebuild-estimated-minutes 30
+ :projection/rebuild-estimated-minutes-note
+ "dominated by passkey credential count x wrap-unwrap latency"
+
+ :projection/non-determinism
+ [{:field "vertex_etzhayyim_auth_*.row_id"
+   :reason "D1 ROWID assigned at INSERT time; logical row matches but physical ID differs across replays"}
+  {:field "vertex_etzhayyim_auth_*.created_at_db"
+   :reason "D1 server timestamp at INSERT, not in source envelope"}]
+
+ :projection/promotion-to-l1
+ {:required
+  ["worker/src-ts/substrate-mst-credential.ts wired into passkeyVerifyRegister + linkEmailVerify + linkOAuthStart so every credential write hits MST first, D1 second"
+   "Rebuild runbook implemented as a one-shot worker command (e.g. `wrangler dev rebuild-projection`)"
+   "Drift detector: periodic D1 <-> MST envelope re-derive + alert on divergence"
+   "Tombstone propagation verified end-to-end (revoke -> MST tombstone -> D1 soft-delete)"]
+  :target-quarter "Q3 2026 (after MIGRATION-TODO Stage 2 cutover)"}}
