@@ -1,1 +1,1 @@
-{:schema "etzhayyim.repository/readme-v1" :name "com-etzhayyim-app-auth" :kind :application :source "etzhayyim/root/60-apps/etzhayyim-project-auth"}
+{:schema "etzhayyim.repository/readme-v1" :name "app-auth" :kind :application :source "etzhayyim/root/60-apps/etzhayyim-project-auth"}
