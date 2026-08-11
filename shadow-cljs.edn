@@ -1,0 +1,40 @@
+;; app.itonami.cloud/auth — two ClojureScript builds, one repo.
+;;
+;; `worker` is the Cloudflare Worker (fetch handler + the AuthStore Durable
+;; Object class named in wrangler.jsonc). `browser` is the sign-in page's
+;; script.
+;;
+;; The browser half is a compiled build and NOT a hand-written .js file. That
+;; is a workspace rule (CLAUDE.md: new .mjs/.cjs/.sh are prohibited; write
+;; nbb/ClojureScript), and it buys something concrete here: `itonami.auth.wire`
+;; — the request/response shapes both halves speak — is one .cljc namespace
+;; compiled into both, so the page and the Worker cannot drift apart in the
+;; way a page scripted by hand always eventually does.
+;;
+;; AuthStore is bound to `make-auth-store`, a 2-arg factory, not to the
+;; deftype's own constructor: Cloudflare calls `new Ctor(state, env)` with
+;; exactly two arguments, and a ClojureScript deftype constructor does not
+;; have that arity. Same shape (and same reason) as authn.durable.
+{:deps   {:aliases [:cljs]}
+ :builds {:worker
+          {:target     :esm
+           :output-dir "js"
+           :modules    {:auth-worker
+                        {:exports {default   itonami.auth.worker/app
+                                   AuthStore itonami.auth.durable/make-auth-store}}}
+           :compiler-options {:output-feature-set :es2020 :infer-externs :auto}}
+
+          ;; Served from its own same-origin route so the page's CSP can be
+          ;; `script-src 'self'` rather than an inline-script hash that has to
+          ;; be recomputed by hand every time the script changes.
+          ;;
+          ;; `:browser` and not `:esm`: a release build of one module emits one
+          ;; `app.js` with no loader and no sibling chunks, which is what a
+          ;; single `<script src>` on a page the Worker inlines can actually
+          ;; serve. `:asset-path` matches the mount so any URL the runtime
+          ;; derives lands on this Worker's own route.
+          :browser
+          {:target     :browser
+           :output-dir "resources/itonami/auth"
+           :asset-path "/auth"
+           :modules    {:app {:init-fn itonami.auth.app/init}}}}}

@@ -1,0 +1,52 @@
+{:paths ["src" "resources"]
+ ;; app.itonami.cloud/auth — the itonami app plane's sign-in surface.
+ ;;
+ ;; A Worker, not a Pages Function, and that is the whole point of the repo:
+ ;; ADR-2607302145 records three known gaps in the Pages-hosted passkey path
+ ;; (clone-detection baseline in eventually-consistent KV with no
+ ;; read-your-writes, no cron rotation sweep, no Durable Object) and states
+ ;; that all three are "platform の差であって設計判断ではない". A Worker has
+ ;; Durable Objects, so they stop being unfixable here.
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}}
+ :aliases
+ {;; Worker + browser build classpath. Both siblings are :local/root rather
+  ;; than git coordinates because `authentication`'s own deps.edn resolves
+  ;; eight siblings through :local/root, and tools.deps forbids :local/root
+  ;; inside a :git/sha dependency — the same constraint net-kotobase/authn
+  ;; records. So this build requires the superproject west checkout.
+  :cljs
+  {:extra-paths ["browser"]
+   :extra-deps {thheller/shadow-cljs {:mvn/version "2.28.20"}
+                ;; webauthn.adapters.edge — the WebAuthn Level 2 ceremony
+                ;; crypto (WebCrypto, no npm), and webauthn.assurance — what a
+                ;; credential actually proves. This repo verifies ceremonies;
+                ;; it does not re-derive how.
+                io.github.kotoba-lang/webauthn
+                {:local/root "../../kotoba-lang/webauthn"}
+                ;; authentication.identity/session-record — the session shape
+                ;; (opaque token, only its SHA-256 digest ever stored). Shared
+                ;; so the itonami app plane and authn.kotobase.net describe a
+                ;; session with one vocabulary.
+                io.github.kotoba-lang/authentication
+                {:local/root "../../kotoba-lang/authentication"}}}
+
+  ;; Build-time page rendering (scripts/render_pages.clj). The design system
+  ;; is scoped here and never reaches the Worker bundle: a shell that renders
+  ;; identically on every request has no reason to cost bundle size in an
+  ;; isolate. Same split net-kotobase/authn uses.
+  :render-pages
+  {:extra-paths ["pages" "scripts"]
+   :extra-deps {io.github.kotoba-lang/jp-go-digital-design-system
+                {:local/root "../../kotoba-lang/jp-go-digital-design-system"}}
+   :main-opts ["-m" "render-pages"]}
+
+  ;; Pure-core tests on the JVM: cookies, viewer payload, return_to
+  ;; containment, credential-record reading, clone baseline seeding. Every
+  ;; namespace here is .cljc precisely so these run without a browser, a
+  ;; Worker, or a network.
+  :test
+  {:extra-paths ["test"]
+   :extra-deps {io.github.cognitect-labs/test-runner
+                {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+   :main-opts ["-m" "cognitect.test-runner"]
+   :exec-fn cognitect.test-runner.api/test}}}
