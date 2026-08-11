@@ -1,0 +1,24 @@
+{
+  "name": "itonami-app-auth",
+  "version": "0.1.0",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "description": "app.itonami.cloud/auth — passkey sign-in for the itonami app plane (CF Worker, ClojureScript).",
+  "type": "module",
+  "scripts": {
+    "pages": "clojure -M:render-pages",
+    "app": "shadow-cljs release browser",
+    "worker": "shadow-cljs release worker",
+    "build": "npm run pages && npm run app && npm run worker",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "dry-run": "wrangler deploy --dry-run --outdir dist",
+    "test": "clojure -M:test",
+    "test:worker": "nbb test/worker_smoke.cljs",
+    "check": "npm run build && npm run test && npm run test:worker"
+  },
+  "devDependencies": {
+    "shadow-cljs": "3.4.11",
+    "wrangler": "4.118.0"
+  }
+}

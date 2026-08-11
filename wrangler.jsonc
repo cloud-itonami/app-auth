@@ -1,31 +1,69 @@
 {
-  "name": "etzhayyim-auth",
-  "main": "worker/svelte/.svelte-kit/cloudflare/_worker.js",
+  "name": "itonami-app-auth",
+  // The shadow-cljs :esm output directly — no generated shim needed.
+  "main": "js/auth-worker.js",
   "compatibility_date": "2025-03-17",
-  "compatibility_flags": ["nodejs_compat"],
+  // Deliberately no "nodejs_compat": everything this Worker does — SHA-256
+  // digests, random tokens, P-256 signature verification — is WebCrypto
+  // (webauthn.adapters.edge). Nothing reaches for node:crypto or Buffer, and
+  // keeping the flag off makes that a build-time guarantee rather than a
+  // convention.
   "routes": [
     {
-      "pattern": "auth.etzhayyim.com/*",
-      "zone_name": "etzhayyim.com"
-    },
-    {
-      "pattern": "authn.etzhayyim.com/*",
-      "zone_name": "etzhayyim.com"
+      // A PATH route on the app plane, not a hostname of its own.
+      //
+      // `app.itonami.cloud` is already an allowed WebAuthn origin for RP
+      // `itonami.cloud` (cloud-itonami.edge.webauthn added it for kaisya on
+      // 2026-08-07), so every passkey enrolled at itonami.cloud/signin/ signs
+      // in here with no re-enrolment. A fresh `auth.itonami.cloud` hostname
+      // would work for the RP too, but it would be a fourth public name for
+      // the same service and buy nothing this one does not already have.
+      //
+      // The mount string lives in `itonami.auth.config/mount` as well. These
+      // two must agree; nothing else in the repo repeats it.
+      "pattern": "app.itonami.cloud/auth*",
+      "zone_name": "itonami.cloud"
     }
   ],
-  "assets": {
-    "directory": "./worker/svelte/.svelte-kit/cloudflare/client",
-    "binding": "ASSETS",
-    "html_handling": "auto-trailing-slash",
-    "not_found_handling": "none"
+  // Sessions, single-use sign-in challenges, and the clone-detection
+  // baseline. A Durable Object and not KV because all three need
+  // read-your-writes: a challenge that can be consumed twice is a replayable
+  // sign-in, and a baseline read from an eventually-consistent store produced
+  // a measured clone-check false negative on 2026-08-03 (ADR-2607302145).
+  // Pages Functions cannot bind one at all, which is why this surface is a
+  // Worker.
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AUTH_STORE",
+        "class_name": "AuthStore"
+      }
+    ]
   },
-  "d1_databases": [
+  "migrations": [
     {
-      "binding": "AUTH_DB",
-      "database_name": "etzhayyim-auth-v2",
-      "database_id": "9b49c788-d4e5-45b2-872a-f737f33f248d"
+      "tag": "v1-auth-store",
+      "new_sqlite_classes": ["AuthStore"]
     }
   ],
+  // The SAME namespace network-awai/cloud-itonami writes credentials to, by
+  // id — not a new one. That is what makes an existing itonami passkey work
+  // here on day one: this service has no separate idea of who has enrolled,
+  // so there is no set of users for the two surfaces to disagree about.
+  //
+  // Read-mostly. The one write is the shared signCount/backup record, kept in
+  // step so the other surface's clone check does not go stale while this one
+  // is in use (itonami.auth.store/touch-credential!).
+  "kv_namespaces": [
+    {
+      "binding": "ITONAMI_DATA",
+      "id": "e9857fe8617440e59f9720293dc53afd"
+    }
+  ],
+  // No KEK binding, and that is the security boundary of this repo: the
+  // credential records carry a sealed Ed25519 key wrapped under
+  // cloud-itonami's KEK, and without it this Worker cannot unwrap or sign as
+  // anybody. Enrolment — which mints that key — stays at itonami.cloud/signin/.
   "observability": {
     "enabled": true
   }
