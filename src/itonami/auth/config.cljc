@@ -59,6 +59,8 @@
 (def challenge-ttl-ms (* 1000 60 5))
 (def authorization-code-ttl-ms (* 1000 60))
 (def access-token-ttl-ms (* 1000 60 5))
+(def federated-state-ttl-ms (* 1000 60 5))
+(def email-token-ttl-ms (* 1000 60 10))
 
 (def oauth-client
   {:client-id "cloud-itonami-app-native"
@@ -89,6 +91,11 @@
    :metadata      "/.well-known/oauth-authorization-server"
    :login-options "/v1/passkey/login/options"
    :login-verify  "/v1/passkey/login/verify"
+   :sso-start     "/v1/sso"
+   :sso-callback  "/v1/sso/callback"
+   :email-start   "/v1/email/start"
+   :email-verify  "/v1/email/verify"
+   :methods       "/v1/methods"
    :session       "/v1/session"
    ;; No `/v1/credentials` inventory yet. Listing every passkey an account
    ;; holds needs the account record, which lives in the enrolment surface's

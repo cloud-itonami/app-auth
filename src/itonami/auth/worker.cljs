@@ -15,6 +15,7 @@
   ClojureScript only."
   (:require [clojure.string :as str]
             [itonami.auth.config :as config]
+            [itonami.auth.federated :as federated]
             [itonami.auth.oauth :as oauth]
             [itonami.auth.passkey :as passkey]
             [itonami.auth.viewer :as viewer]
@@ -66,12 +67,23 @@
                                    "cache-control" "public, max-age=3600"
                                    "x-content-type-options" "nosniff"}}))
 
-(defn- redirect-response [location]
-  (js/Response. nil
-                #js {:status 303
-                     :headers #js {"location" location
+(defn- redirect-response
+  ([location] (redirect-response location nil))
+  ([location set-cookie]
+   (let [headers (js/Headers. #js {"location" location
                                    "cache-control" "no-store"
-                                   "referrer-policy" "no-referrer"}}))
+                                   "referrer-policy" "no-referrer"})]
+     (when set-cookie (.append headers "set-cookie" set-cookie))
+     (js/Response. nil #js {:status 303 :headers headers}))))
+
+(defn- redirect-result [{:keys [location set-cookie]}]
+  (redirect-response location set-cookie))
+
+(defn- provider-from [path prefix]
+  (let [raw (when (str/starts-with? path (str prefix "/"))
+              (subs path (inc (count prefix))))
+        provider (some-> raw keyword)]
+    (when (contains? federated/providers provider) provider)))
 
 ;; ── handlers ────────────────────────────────────────────────────────────────
 
@@ -141,6 +153,42 @@
 
       (and (= method "GET") (= path (p :metadata)))
       (js/Promise.resolve (json oauth/metadata 200))
+
+      (and (= method "GET") (= path (p :methods)))
+      (js/Promise.resolve (json (federated/method-status env) 200))
+
+      (and (= method "GET") (provider-from path (p :sso-start)))
+      (let [provider (provider-from path (p :sso-start))]
+        (-> (passkey/resolve-session! env (cookie-header request))
+            (.then #(federated/start! env provider
+                                      (js-invoke (aget url "searchParams") "get" "return_to") %))
+            (.then (fn [result]
+                     (if (:location result) (redirect-result result) (respond result))))))
+
+      (and (contains? #{"GET" "POST"} method)
+           (provider-from path (p :sso-callback)))
+      (let [provider (provider-from path (p :sso-callback))]
+        (-> (if (= method "POST") (read-form request)
+                (js/Promise.resolve (query-map url)))
+            (.then #(federated/callback! env provider %))
+            (.then redirect-result)))
+
+      (and (= method "POST") (= path (p :email-start)))
+      (-> (js/Promise.all #js [(read-json request)
+                               (passkey/resolve-session! env (cookie-header request))])
+          (.then (fn [values]
+                   (let [body (aget values 0) session (aget values 1)]
+                     (if-not (map? body)
+                       (json {"ok" false "error" "malformed request"} 400)
+                       (-> (federated/email-start! env (get body "email")
+                                                   (get body "returnTo")
+                                                   (js->clj session))
+                           (.then respond)))))))
+
+      (and (= method "GET") (= path (p :email-verify)))
+      (-> (federated/email-verify!
+           env (js-invoke (aget url "searchParams") "get" "token"))
+          (.then redirect-result))
 
       (and (= method "GET") (= path (p :authorize)))
       (-> (passkey/resolve-session! env (cookie-header request))

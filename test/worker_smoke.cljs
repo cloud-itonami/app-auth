@@ -39,11 +39,13 @@
     #js {:get (fn [k] (js/Promise.resolve (or (.get m k) nil)))
          :put (fn [k v] (.set m k v) (js/Promise.resolve nil))}))
 
-(defn- fake-env [& {:keys [credentials] :or {credentials {}}}]
+(defn- fake-env [& {:keys [credentials bindings] :or {credentials {} bindings {}}}]
   (let [store ((aget worker "AuthStore") #js {:storage (fake-storage)} #js {})]
-    #js {:AUTH_STORE #js {:idFromName (fn [n] n)
-                          :get (fn [_] store)}
-         :ITONAMI_DATA (fake-kv credentials)}))
+    (js/Object.assign
+     #js {:AUTH_STORE #js {:idFromName (fn [n] n)
+                           :get (fn [_] store)}
+          :ITONAMI_DATA (fake-kv credentials)}
+     (clj->js bindings))))
 
 (defn- fetch! [env url & [opts]]
   ;; Cloudflare accepts either a Response or Promise<Response> from fetch.
@@ -225,6 +227,43 @@
                  (check "health names the RP it is serving"
                         (= "itonami.cloud" (aget body "rpId"))))))))
 
+(defn- case-federated-methods-and-linking []
+  (let [env (fake-env :bindings {"EMAIL_DELIVERY_TOKEN" "delivery"
+                                 "GOOGLE_CLIENT_ID" "google-client"
+                                 "GOOGLE_CLIENT_SECRET" "google-secret"})
+        key "identity:google:subject-digest"]
+    (-> (fetch! env "https://auth.itonami.cloud/v1/methods")
+        (.then (fn [res] (.json res)))
+        (.then
+         (fn [body]
+           (check "email is advertised only when its delivery secret exists"
+                  (true? (aget body "email")))
+           (let [providers (array-seq (aget body "sso"))
+                 configured (fn [id]
+                              (some-> (some #(when (= id (aget % "id")) %) providers)
+                                      (aget "configured")))]
+             (check "Google is enabled by its exact client bindings" (configured "google"))
+             (check "Apple stays disabled without all signing bindings"
+                    (false? (configured "apple"))))))
+        (.then (fn [_]
+                 (store-call! env {:op "identity-complete" :key key})))
+        (.then (fn [unlinked]
+                 (check "an external subject cannot create a DID"
+                        (= "link-required" (aget unlinked "reason")))
+                 (store-call! env {:op "identity-complete" :key key
+                                   :did "did:key:z6MkRoot"})))
+        (.then (fn [linked]
+                 (check "a passkey DID can link the subject" (aget linked "linked"))
+                 (store-call! env {:op "identity-complete" :key key})))
+        (.then (fn [login]
+                 (check "the linked subject resolves to the same DID"
+                        (= "did:key:z6MkRoot" (aget login "did")))
+                 (store-call! env {:op "identity-complete" :key key
+                                   :did "did:key:z6MkOther"})))
+        (.then (fn [conflict]
+                 (check "a subject cannot be rebound to another DID"
+                        (= "already-bound" (aget conflict "reason"))))))))
+
 (defn- case-oauth-pkce-is-single-use []
   (let [env (fake-env)
         cookie-token "central-session-token"
@@ -300,6 +339,7 @@
       (.then #(run-case "logout" case-logout-always-clears))
       (.then #(run-case "routing" case-not-found))
       (.then #(run-case "health" case-health))
+      (.then #(run-case "federated methods and linking" case-federated-methods-and-linking))
       (.then #(run-case "OAuth PKCE" case-oauth-pkce-is-single-use))
       (.then (fn [_]
                (if (zero? @failures)

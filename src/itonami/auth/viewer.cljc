@@ -155,7 +155,8 @@
   that does not. It is not an assurance level: nothing here has seen an
   attestation chain, and a field named `assurance` would be read as though
   something had."
-  [{:keys [account-did active-did credential-id backup-eligible? backed-up? expires-at]}]
+  [{:keys [account-did active-did credential-id backup-eligible? backed-up?
+           auth-method acr amr authenticated-at expires-at]}]
   {"valid" true
    "did" (or account-did active-did)
    "accountDid" account-did
@@ -163,6 +164,10 @@
    "credentialId" credential-id
    "backupEligible" (boolean backup-eligible?)
    "backedUp" (boolean backed-up?)
+   "authMethod" (or auth-method "webauthn")
+   "acr" (or acr "phishing-resistant")
+   "amr" (or amr ["webauthn"])
+   "authenticatedAt" authenticated-at
    "expiresAt" expires-at})
 
 (def anonymous {"valid" false})

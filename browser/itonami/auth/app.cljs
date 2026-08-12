@@ -87,6 +87,35 @@
             "このパスキーは同期されていません。2本目を作っておくと、端末を失っても入れます。")))
   (show! "signed-in"))
 
+(defn- setup-methods! [viewer]
+  (-> (get-json (config/endpoint :methods))
+      (.then
+       (fn [methods]
+         (doseq [provider (get methods "sso")]
+           (when-let [el ($ (str "[data-sso=\"" (get provider "id") "\"]"))]
+             (when (get provider "configured")
+               (set! (.-hidden el) false)
+               (.setAttribute el "href"
+                              (str (config/endpoint :sso-start) "/" (get provider "id")
+                                   "?return_to=" (js/encodeURIComponent (return-to)))))))
+         (when-let [form ($ "#email-form")]
+           (set! (.-hidden form) (not (get methods "email"))))
+         (when-let [mode ($ "#auth-method-mode")]
+           (set! (.-textContent mode)
+                 (if (get viewer "valid")
+                   "この DID に Email / SSO を連携します。連携後は次回からその方法でサインインできます。"
+                   "連携済みの Email / SSO でサインインできます。初回はパスキーが必要です。")))))))
+
+(defn- email! [event]
+  (.preventDefault event)
+  (status! "サインインリンクを送っています…" nil)
+  (-> (post (config/endpoint :email-start)
+            {"email" (some-> ($ "#email-address") .-value)
+             "returnTo" (return-to)})
+      (.then (fn [_]
+               (status! "手続きできるアドレスには、10分有効なリンクを送りました。" "ok")))
+      (.catch (fn [_] (status! "リンクを送れませんでした。" "error")))))
+
 (defn- sign-in! []
   (status! "パスキーを確認しています…" nil)
   (-> (post (config/endpoint :login-options) {})
@@ -148,15 +177,24 @@
 ;; ── init ────────────────────────────────────────────────────────────────────
 
 (defn init []
-  (if-not (and js/window.PublicKeyCredential js/navigator.credentials)
-    (show! "unsupported")
-    (do
+  (do
+    (when (and js/window.PublicKeyCredential js/navigator.credentials)
       (some-> ($ "[data-act=\"passkey\"]") (.addEventListener "click" #(sign-in!)))
-      (some-> ($ "[data-act=\"logout\"]") (.addEventListener "click" #(logout! false)))
-      (some-> ($ "[data-act=\"logout-all\"]") (.addEventListener "click" #(logout! true)))
-      ;; Ask who is already here before offering to sign anyone in: arriving
-      ;; at a sign-in page with a live session and being asked to authenticate
-      ;; again is the most common way a session silently is not working.
-      (-> (get-json (config/endpoint :session))
-          (.then (fn [viewer] (if (get viewer "valid") (signed-in! viewer) (show! "sign-in"))))
-          (.catch (fn [_] (show! "sign-in")))))))
+      )
+    (some-> ($ "[data-act=\"logout\"]") (.addEventListener "click" #(logout! false)))
+    (some-> ($ "[data-act=\"logout-all\"]") (.addEventListener "click" #(logout! true)))
+    (some-> ($ "#email-form") (.addEventListener "submit" email!))
+    ;; Ask who is already here before offering to sign anyone in: arriving
+    ;; at a sign-in page with a live session and being asked to authenticate
+    ;; again is the most common way a session silently is not working.
+    (-> (get-json (config/endpoint :session))
+        (.then (fn [viewer]
+                 (if (get viewer "valid") (signed-in! viewer) (show! "sign-in"))
+                 (setup-methods! viewer)
+                 (when-let [error (.get (js/URLSearchParams. (.-search js/location)) "error")]
+                   (status! (case error
+                              "link_required" "この方法はまだ DID に連携されていません。先にパスキーでサインインしてください。"
+                              "email_invalid" "Email リンクが無効または期限切れです。"
+                              "provider_cancelled" "プロバイダーでのサインインを中止しました。"
+                              "サインインを完了できませんでした。") "error"))))
+        (.catch (fn [_] (show! "sign-in"))))))

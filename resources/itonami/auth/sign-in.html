@@ -2680,7 +2680,7 @@ body { padding-bottom: env(safe-area-inset-bottom); }
       <div class="dds-ext-container">
         <section data-view="sign-in" data-active="false">
           <h1 class="dads-heading" data-size="45">サインイン</h1>
-          <p class="auth-mut">この端末に登録したパスキーでサインインします。パスワードはありません。</p>
+          <p class="auth-mut">パスキー、連携済みアカウント、または Email でサインインします。</p>
           <div class="auth-actions">
             <button data-act="passkey" class="dads-button" data-type="solid-fill" data-size="lg" type="button">パスキーでサインイン</button>
             <a class="dads-button" data-type="text" data-size="md" href="https://itonami.cloud/signin/">パスキーを作る</a>
@@ -2701,6 +2701,13 @@ body { padding-bottom: env(safe-area-inset-bottom); }
           <h1 class="dads-heading" data-size="45">この端末では使えません</h1>
           <p>このブラウザはパスキー（WebAuthn）に対応していません。対応しているブラウザで開き直してください。</p>
           <p class="auth-mut">iOS / iPadOS は Safari 16 以降、macOS は Safari 16 / Chrome 108 以降、Windows は Chrome / Edge 108 以降で使えます。</p>
+        </section>
+        <section>
+          <h2 class="dads-heading" data-size="32">その他の方法</h2>
+          <p id="auth-method-mode" class="auth-mut">初回はパスキーで本人の DID を作り、その後に各方法を連携します。</p>
+          <div class="auth-actions" id="sso-methods"><a data-sso="apple" hidden class="dads-button" data-type="outline" data-size="md" href="#">Apple で続ける</a><a data-sso="google" hidden class="dads-button" data-type="outline" data-size="md" href="#">Google で続ける</a><a data-sso="github" hidden class="dads-button" data-type="outline" data-size="md" href="#">GitHub で続ける</a><a data-sso="microsoft" hidden class="dads-button" data-type="outline" data-size="md" href="#">Microsoft で続ける</a></div>
+          <form id="email-form" class="auth-actions" hidden><label for="email-address">Email</label><input id="email-address" name="email" type="email" autocomplete="email" required><button type="button" class="dads-button" data-type="outline" data-size="md">サインインリンクを送る</button></form>
+          <p class="auth-mut">Email や SSO の一致だけでは DID を作成・統合しません。未連携の場合は先にパスキーでサインインしてください。</p>
         </section>
         <p id="auth-status" class="auth-status" role="status" aria-live="polite"></p>
       </div>

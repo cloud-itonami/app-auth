@@ -87,8 +87,7 @@
    "sign-in"
    (dds/heading 1 "サインイン")
    [:p {:class "auth-mut"}
-    "この端末に登録したパスキーでサインインします。"
-    "パスワードはありません。"]
+    "パスキー、連携済みアカウント、または Email でサインインします。"]
    [:div {:class "auth-actions"}
     (dds/button "パスキーでサインイン"
                 {:type :solid-fill :size "lg" :attrs {:data-act "passkey"}})
@@ -96,6 +95,27 @@
    [:p {:class "auth-mut"}
     "パスキーをまだ持っていない場合は「パスキーを作る」から登録してください。"
     "登録は itonami.cloud で行います。"]))
+
+(defn- alternate-methods []
+  [:section
+   (dds/heading 2 "その他の方法")
+   [:p {:id "auth-method-mode" :class "auth-mut"}
+    "初回はパスキーで本人の DID を作り、その後に各方法を連携します。"]
+   [:div {:class "auth-actions" :id "sso-methods"}
+    (for [[id label] [["apple" "Apple"] ["google" "Google"]
+                      ["github" "GitHub"] ["microsoft" "Microsoft"]]]
+      (dds/button (str label " で続ける")
+                  {:type :outline :href "#"
+                   :attrs {:data-sso id :hidden true}}))]
+   [:form {:id "email-form" :class "auth-actions" :hidden true}
+    [:label {:for "email-address"} "Email"]
+    [:input {:id "email-address" :name "email" :type "email"
+             :autocomplete "email" :required true}]
+    (dds/button "サインインリンクを送る"
+                {:type :outline :attrs {:type "submit"}})]
+   [:p {:class "auth-mut"}
+    "Email や SSO の一致だけでは DID を作成・統合しません。"
+    "未連携の場合は先にパスキーでサインインしてください。"]])
 
 (defn- signed-in-view []
   (view
@@ -139,4 +159,5 @@
      (sign-in-view)
      (signed-in-view)
      (unsupported-view)
+     (alternate-methods)
      [:p {:id "auth-status" :class "auth-status" :role "status" :aria-live "polite"}])]))

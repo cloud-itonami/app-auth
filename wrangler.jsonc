@@ -55,6 +55,9 @@
       "id": "e9857fe8617440e59f9720293dc53afd"
     }
   ],
+  // Federated providers and Email are fail-closed Worker secrets; see README.
+  // No placeholder belongs in vars: a button is exposed only when its exact
+  // required bindings exist. Install with `wrangler secret put <NAME>`.
   // No KEK binding, and that is the security boundary of this repo: the
   // credential records carry a sealed Ed25519 key wrapped under
   // cloud-itonami's KEK, and without it this Worker cannot unwrap or sign as
