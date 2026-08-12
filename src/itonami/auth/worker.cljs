@@ -1,5 +1,6 @@
 (ns itonami.auth.worker
-  "app.itonami.cloud/auth — the fetch handler.
+  "auth.itonami.cloud — the fetch handler, with app.itonami.cloud/auth as a
+  compatibility route.
 
   Routing is mount-relative (`config/route`), so the string \"/auth\" appears
   once in this repo and moving the mount is a one-line change rather than a
@@ -14,6 +15,7 @@
   ClojureScript only."
   (:require [clojure.string :as str]
             [itonami.auth.config :as config]
+            [itonami.auth.oauth :as oauth]
             [itonami.auth.passkey :as passkey]
             [itonami.auth.viewer :as viewer]
             [shadow.resource :as rc]))
@@ -64,6 +66,13 @@
                                    "cache-control" "public, max-age=3600"
                                    "x-content-type-options" "nosniff"}}))
 
+(defn- redirect-response [location]
+  (js/Response. nil
+                #js {:status 303
+                     :headers #js {"location" location
+                                   "cache-control" "no-store"
+                                   "referrer-policy" "no-referrer"}}))
+
 ;; ── handlers ────────────────────────────────────────────────────────────────
 
 (defn- read-json
@@ -77,17 +86,43 @@
 (defn- cookie-header [request]
   (js-invoke (aget request "headers") "get" "cookie"))
 
+(defn- query-map [url]
+  (let [out (atom {})]
+    (js-invoke (aget url "searchParams") "forEach"
+               (fn [value key] (swap! out assoc key value)))
+    @out))
+
+(defn- read-form [request]
+  (-> (js-invoke request "text")
+      (.then (fn [body]
+               (let [params (js/URLSearchParams. body)
+                     out (atom {})]
+                 (js-invoke params "forEach"
+                            (fn [value key] (swap! out assoc key value)))
+                 @out)))
+      (.catch (fn [_] nil))))
+
+(defn- authorization-header [request]
+  (js-invoke (aget request "headers") "get" "authorization"))
+
 (defn- respond [{:keys [status body set-cookie]}]
   (json body status set-cookie))
 
 (defn- handle [request env]
   (let [url (js/URL. (aget request "url"))
+        host (aget url "host")
         method (aget request "method")
         path (config/route (aget url "pathname"))
         p (fn [k] (get config/paths k))]
     (cond
       (nil? path)
       (js/Promise.resolve (json {"ok" false "error" "not found"} 404))
+
+      ;; The former path surface remains a navigation alias. API calls under
+      ;; it continue to work during the migration, but the human-facing page
+      ;; acquires only the host-only cookie at the canonical origin.
+      (and (= host "app.itonami.cloud") (= method "GET") (= path "/"))
+      (js/Promise.resolve (redirect-response config/canonical-origin))
 
       ;; The page. `?return_to=` is contained before it is written into the
       ;; document, so the sign-in page cannot be turned into an open redirect
@@ -103,6 +138,33 @@
 
       (and (= method "GET") (= path (p :health)))
       (js/Promise.resolve (json {"ok" true "service" "itonami-app-auth" "rpId" config/rp-id} 200))
+
+      (and (= method "GET") (= path (p :metadata)))
+      (js/Promise.resolve (json oauth/metadata 200))
+
+      (and (= method "GET") (= path (p :authorize)))
+      (-> (passkey/resolve-session! env (cookie-header request))
+          (.then (fn [session]
+                   (if-not (get session "valid")
+                     (redirect-response
+                      (str config/canonical-origin
+                           "/?return_to="
+                           (js/encodeURIComponent (aget url "href"))))
+                     (-> (oauth/authorize! env (query-map url) session)
+                         (.then (fn [result]
+                                  (if-let [location (:location result)]
+                                    (redirect-response location)
+                                    (respond result)))))))))
+
+      (and (= method "POST") (= path (p :token)))
+      (-> (read-form request)
+          (.then (fn [form]
+                   (if-not (map? form)
+                     (json {"error" "invalid_request"} 400)
+                     (.then (oauth/exchange! env form) respond)))))
+
+      (and (= method "GET") (= path (p :userinfo)))
+      (.then (oauth/userinfo! env (authorization-header request)) respond)
 
       (and (= method "POST") (= path (p :login-options)))
       (.then (passkey/login-options! env) respond)

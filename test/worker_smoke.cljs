@@ -46,8 +46,34 @@
          :ITONAMI_DATA (fake-kv credentials)}))
 
 (defn- fetch! [env url & [opts]]
-  (.fetch (aget worker "default")
-          (js/Request. url (clj->js (or opts {}))) env #js {}))
+  ;; Cloudflare accepts either a Response or Promise<Response> from fetch.
+  ;; Normalize both so the harness exercises the same contract.
+  (js/Promise.resolve
+   (.fetch (aget worker "default")
+           (js/Request. url (clj->js (or opts {}))) env #js {})))
+
+(defn- digest [s encoding]
+  (-> (js/crypto.subtle.digest "SHA-256" (.encode (js/TextEncoder.) s))
+      (.then (fn [buf]
+               (let [bytes (js/Uint8Array. buf)]
+                 (if (= encoding :hex)
+                   (->> (array-seq bytes)
+                        (map (fn [b] (.padStart (.toString b 16) 2 "0")))
+                        (apply str))
+                   (-> (js/btoa (.apply js/String.fromCharCode nil bytes))
+                       (.replace (js/RegExp. "\\+" "g") "-")
+                       (.replace (js/RegExp. "/" "g") "_")
+                       (.replace (js/RegExp. "=+$" "") ""))))))))
+
+(defn- store-call! [env body]
+  (let [namespace (aget env "AUTH_STORE")
+        store (.get namespace (.idFromName namespace "itonami-auth"))]
+    (-> (.fetch store
+                (js/Request. "https://itonami-auth.internal/store"
+                             #js {:method "POST"
+                                  :headers #js {"content-type" "application/json"}
+                                  :body (js/JSON.stringify (clj->js body))}))
+        (.then (fn [res] (.json res))))))
 
 ;; ── the harness ─────────────────────────────────────────────────────────────
 
@@ -62,11 +88,17 @@
   (println label)
   (f))
 
+(defn- then! [promise f]
+  ;; Advanced-compiled Promises returned by the Worker can cross nbb's module
+  ;; boundary without method metadata. Calling the actual JS function keeps
+  ;; the test about the Worker contract rather than nbb's interop cache.
+  (.call (aget promise "then") promise f))
+
 ;; ── cases ───────────────────────────────────────────────────────────────────
 
 (defn- case-page []
   (let [env (fake-env)]
-    (-> (fetch! env "https://app.itonami.cloud/auth")
+    (-> (fetch! env "https://auth.itonami.cloud/")
         (.then (fn [res]
                  (check "GET /auth is 200" (= 200 (.-status res)))
                  (check "served as HTML"
@@ -79,7 +111,7 @@
                  (check "the rendered page was inlined at build time"
                         (str/includes? body "dads-button"))
                  (check "the script is referenced, not inlined"
-                        (str/includes? body "src=\"/auth/app.js\""))
+                        (str/includes? body "src=\"/app.js\""))
                  (check "all three views are in the one document"
                         (= 3 (count (re-seq #"data-view=" body))))
                  (check "the unreplaced slot is gone"
@@ -87,17 +119,17 @@
 
 (defn- case-return-to []
   (let [env (fake-env)]
-    (-> (fetch! env "https://app.itonami.cloud/auth?return_to=https://evil.example/x")
+    (-> (fetch! env "https://auth.itonami.cloud/?return_to=https://evil.example/x")
         (.then (fn [res] (.text res)))
         (.then (fn [body]
                  (check "an off-site return_to never reaches the document"
                         (not (str/includes? body "evil.example")))
                  (check "and is replaced by the mount"
-                        (str/includes? body "data-return-to=\"/auth\"")))))))
+                        (str/includes? body "data-return-to=\"/\"")))))))
 
 (defn- case-script []
   (let [env (fake-env)]
-    (-> (fetch! env "https://app.itonami.cloud/auth/app.js")
+    (-> (fetch! env "https://auth.itonami.cloud/app.js")
         (.then (fn [res]
                  (check "GET /auth/app.js is 200" (= 200 (.-status res)))
                  (check "served as JavaScript"
@@ -116,7 +148,7 @@
 
 (defn- case-anonymous-session []
   (let [env (fake-env)]
-    (-> (fetch! env "https://app.itonami.cloud/auth/v1/session")
+    (-> (fetch! env "https://auth.itonami.cloud/v1/session")
         (.then (fn [res] (.json res)))
         (.then (fn [body]
                  (check "no cookie reads as no session" (false? (aget body "valid"))))))))
@@ -124,7 +156,7 @@
 (defn- case-challenge-is-single-use []
   (let [env (fake-env)
         opts #js {:method "POST"}]
-    (-> (fetch! env "https://app.itonami.cloud/auth/v1/passkey/login/options" opts)
+    (-> (fetch! env "https://auth.itonami.cloud/v1/passkey/login/options" opts)
         (.then (fn [res] (.json res)))
         (.then (fn [body]
                  (check "login/options issues a challenge" (aget body "ok"))
@@ -137,7 +169,7 @@
                  ;; sign-in un-replayable.
                  (let [challenge (aget body "challenge")
                        attempt (fn []
-                                 (-> (fetch! env "https://app.itonami.cloud/auth/v1/passkey/login/verify"
+                                 (-> (fetch! env "https://auth.itonami.cloud/v1/passkey/login/verify"
                                              {:method "POST"
                                               :headers {"content-type" "application/json"}
                                               :body (js/JSON.stringify
@@ -158,7 +190,7 @@
 
 (defn- case-origin-is-checked []
   (let [env (fake-env)]
-    (-> (fetch! env "https://app.itonami.cloud/auth/v1/passkey/login/verify"
+    (-> (fetch! env "https://auth.itonami.cloud/v1/passkey/login/verify"
                 {:method "POST"
                  :headers {"content-type" "application/json"
                            ;; ends with the same characters as an origin we
@@ -171,7 +203,7 @@
 
 (defn- case-logout-always-clears []
   (let [env (fake-env)]
-    (-> (fetch! env "https://app.itonami.cloud/auth/v1/logout" {:method "POST"})
+    (-> (fetch! env "https://auth.itonami.cloud/v1/logout" {:method "POST"})
         (.then (fn [res]
                  (check "logout without a session still answers 200" (= 200 (.-status res)))
                  (check "and clears the cookie"
@@ -180,18 +212,80 @@
 
 (defn- case-not-found []
   (let [env (fake-env)]
-    (-> (fetch! env "https://app.itonami.cloud/authority")
+    (-> (fetch! env "https://auth.itonami.cloud/authority")
         (.then (fn [res]
                  (check "a path that merely shares a prefix is not ours"
                         (= 404 (.-status res))))))))
 
 (defn- case-health []
   (let [env (fake-env)]
-    (-> (fetch! env "https://app.itonami.cloud/auth/health")
+    (-> (fetch! env "https://auth.itonami.cloud/health")
         (.then (fn [res] (.json res)))
         (.then (fn [body]
                  (check "health names the RP it is serving"
                         (= "itonami.cloud" (aget body "rpId"))))))))
+
+(defn- case-oauth-pkce-is-single-use []
+  (let [env (fake-env)
+        cookie-token "central-session-token"
+        verifier (apply str (repeat 43 "v"))
+        state (apply str (repeat 32 "s"))]
+    (-> (js/Promise.all #js [(digest cookie-token :hex)
+                             (digest verifier :base64url)])
+        (.then
+         (fn [values]
+           (let [session-digest (aget values 0)
+                 challenge (aget values 1)]
+             (-> (store-call! env {:op "session-put"
+                                   :key (str "session:" session-digest)
+                                   :ttl_ms 60000 :now_ms (js/Date.now)
+                                   :value {"accountDid" "did:web:kotobase.net:person:1"
+                                           "activeDid" "did:key:z6Mk1"}})
+                 (.then
+                  (fn [_]
+                    (let [authorize (str "https://auth.itonami.cloud/authorize"
+                                         "?client_id=cloud-itonami-app-native"
+                                         "&redirect_uri=" (js/encodeURIComponent
+                                                            "http://127.0.0.1:1338/api/auth/itonami/callback")
+                                         "&response_type=code&scope=identity%3Aread"
+                                         "&state=" state
+                                         "&code_challenge=" challenge
+                                         "&code_challenge_method=S256")]
+                      (fetch! env authorize
+                              {:headers {"cookie" (str "__Host-itonami_session=" cookie-token)}}))))
+                 (.then
+                  (fn [res]
+                    (check "authorize redirects to the exact loopback callback" (= 303 (.-status res)))
+                    (let [location (.get (.-headers res) "location")
+                          callback (js/URL. location)
+                          code (.get (.-searchParams callback) "code")
+                          form (str "grant_type=authorization_code"
+                                    "&client_id=cloud-itonami-app-native"
+                                    "&redirect_uri=" (js/encodeURIComponent
+                                                       "http://127.0.0.1:1338/api/auth/itonami/callback")
+                                    "&code=" (js/encodeURIComponent code)
+                                    "&code_verifier=" verifier)
+                          exchange (fn []
+                                     (let [result (fetch! env "https://auth.itonami.cloud/oauth/token"
+                                                          {:method "POST"
+                                                           :headers {"content-type" "application/x-www-form-urlencoded"}
+                                                           :body form})]
+                                       result))]
+                      (-> (then! (exchange)
+                                 (fn [token-res]
+                                   (check "a correct verifier exchanges the code" (= 200 (.-status token-res)))
+                                   (.json token-res)))
+                          (then! (fn [token-body]
+                                   (let [access (aget token-body "access_token")]
+                                     (-> (fetch! env "https://auth.itonami.cloud/userinfo"
+                                                 {:headers {"authorization" (str "Bearer " access)}})
+                                         (.then (fn [userinfo-res]
+                                                  (check "access token resolves at userinfo"
+                                                         (= 200 (.-status userinfo-res)))))))))
+                          (then! (fn [_] (exchange)))
+                          (then! (fn [replay]
+                                   (check "authorization code replay is refused"
+                                          (= 400 (.-status replay))))))))))))))))
 
 ;; ── run ─────────────────────────────────────────────────────────────────────
 
@@ -206,6 +300,7 @@
       (.then #(run-case "logout" case-logout-always-clears))
       (.then #(run-case "routing" case-not-found))
       (.then #(run-case "health" case-health))
+      (.then #(run-case "OAuth PKCE" case-oauth-pkce-is-single-use))
       (.then (fn [_]
                (if (zero? @failures)
                  (println "\nworker smoke: all checks passed")

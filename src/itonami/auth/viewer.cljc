@@ -14,8 +14,8 @@
 (defn set-cookie
   "The `Set-Cookie` value for an issued session.
 
-  `Domain` is the registrable parent (see `config/cookie-domain`) so one
-  sign-in covers the app plane and the site. `SameSite=Lax` and not `Strict`:
+  `__Host-` plus no `Domain` contains the browser session to the dedicated
+  authentication origin. `SameSite=Lax` and not `Strict`:
   Strict withholds the cookie on a top-level navigation that arrives from
   another site, so a person following a link into `app.itonami.cloud/kaisya`
   from their mail would land signed-out and re-authenticate for no security
@@ -23,13 +23,12 @@
   is the property that matters."
   [token max-age-sec]
   (str config/cookie-name "=" token
-       "; Domain=" config/cookie-domain
        "; Path=/; HttpOnly; Secure; SameSite=Lax"
        "; Max-Age=" max-age-sec))
 
 (defn clear-cookie []
-  (str config/cookie-name "=; Domain=" config/cookie-domain
-       "; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"))
+  (str config/cookie-name
+       "=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"))
 
 (defn cookie-token
   "Read our token out of a raw `Cookie` header.
@@ -62,7 +61,7 @@
   open redirect on a sign-in page hands an attacker a link that really does
   authenticate the victim and then delivers them somewhere else."
   [raw]
-  (let [fallback config/mount]
+  (let [fallback "/"]
     (cond
       (not (string? raw)) fallback
       (str/blank? raw) fallback
@@ -75,6 +74,29 @@
                           (str/ends-with? host (str "." config/cookie-domain))))
           raw
           fallback)))))
+
+(defn oauth-request
+  "Validate the one public native client and its exact loopback redirect."
+  [params]
+  (let [{expected-client :client-id expected-redirect :redirect-uri
+         expected-scope :scope} config/oauth-client
+        client-id (get params "client_id")
+        redirect-uri (get params "redirect_uri")
+        response-type (get params "response_type")
+        scope (get params "scope")
+        state (get params "state")
+        challenge (get params "code_challenge")
+        method (get params "code_challenge_method")]
+    (when (and (= expected-client client-id)
+               (= expected-redirect redirect-uri)
+               (= "code" response-type)
+               (= expected-scope scope)
+               (= "S256" method)
+               (string? state) (<= 32 (count state) 512)
+               (string? challenge)
+               (boolean (re-matches #"[A-Za-z0-9_-]{43,128}" challenge)))
+      {:client-id client-id :redirect-uri redirect-uri :scope scope
+       :state state :code-challenge challenge})))
 
 ;; ── what a stored credential says ───────────────────────────────────────────
 
