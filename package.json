@@ -19,6 +19,6 @@
   },
   "devDependencies": {
     "shadow-cljs": "3.4.11",
-    "wrangler": "4.118.0"
+    "wrangler": "^4.121.0"
   }
 }

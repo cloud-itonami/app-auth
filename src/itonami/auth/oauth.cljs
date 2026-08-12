@@ -33,7 +33,10 @@
           value (merge request
                        {:account-did (get session "accountDid")
                         :active-did (get session "activeDid")
-                        :authenticated-at (js/Date.now)})]
+                        :acr (get session "acr")
+                        :amr (get session "amr")
+                        :authenticated-at (or (get session "authenticatedAt")
+                                              (js/Date.now))})]
       (-> (digest code :hex)
           (.then (fn [d]
                    (store/call! env "code-put"
@@ -62,6 +65,8 @@
                      "activeDid" (:active-did value)
                      "clientId" (:client-id value)
                      "scope" (:scope value)
+                     "acr" (:acr value)
+                     "amr" (:amr value)
                      "authenticatedAt" (:authenticated-at value)}})))
         (.then
          (fn [_]
@@ -116,8 +121,8 @@
                          "active_did" (aget v "activeDid")
                          "client_id" (aget v "clientId")
                          "scope" (aget v "scope")
-                         "acr" "phishing-resistant"
-                         "amr" ["webauthn"]
+                         "acr" (or (aget v "acr") "phishing-resistant")
+                         "amr" (js->clj (or (aget v "amr") #js ["webauthn"]))
                          "auth_time" (quot (aget v "authenticatedAt") 1000)}}))))))))
 
 (def metadata

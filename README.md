@@ -17,14 +17,54 @@ replaced rather than ported: see ADR-2608110100.
 
 | | |
 |---|---|
-| **Does** | verify a WebAuthn assertion, decide clone detection, issue and revoke an opaque browser session, exchange a one-minute Authorization Code + PKCE for a five-minute native-app token |
-| **Does not** | enrol a passkey, mint or hold any signing key, model accounts or organisations |
+| **Does** | verify a WebAuthn assertion, link a verified Apple/Google/GitHub/Microsoft/Email subject to that passkey DID, issue and revoke an opaque browser session, exchange a one-minute Authorization Code + PKCE for a five-minute native-app token |
+| **Does not** | enrol a passkey, mint or hold an itonami signing key, create or merge an identity from email equality |
 
 Enrolment stays at `itonami.cloud/signin/`, which owns custody: registration
 there mints a server-custodied Ed25519 key wrapped under a KEK. **This Worker
 has no KEK binding, so it cannot sign as any user — by construction, not by
 policy.** A second enrolment path would have required that secret here and
 given the same custody two implementations.
+
+## Email and SSO are alternate proofs, not new roots
+
+The first sign-in remains a passkey ceremony. While that session is live, a
+person may link Apple, Google, GitHub, Microsoft, or Email. A later verified
+subject resolves to the same DID and may issue a `single-factor` session. An
+unknown subject is sent back with `link_required`; it never creates a DID, and
+an already-linked subject cannot be rebound to another DID. These decisions
+are atomic in `AuthStore`, so two concurrent callbacks cannot claim one
+subject for different accounts.
+
+Every provider uses a five-minute, single-use state and Authorization Code
+flow. Google, GitHub, and Microsoft use PKCE S256 in addition to their Worker
+secret. Apple uses `form_post`; its client-secret JWT is generated in the
+Worker from the scoped P-256 key, and Apple's ID token signature, issuer,
+audience, nonce and expiry are verified before its subject is accepted.
+Email links are ten-minute, single-use opaque tokens stored only by digest and
+sent through the existing authenticated itonami.cloud delivery endpoint.
+
+The callback URIs to register are:
+
+```text
+https://auth.itonami.cloud/v1/sso/callback/apple
+https://auth.itonami.cloud/v1/sso/callback/google
+https://auth.itonami.cloud/v1/sso/callback/github
+https://auth.itonami.cloud/v1/sso/callback/microsoft
+```
+
+Provider configuration is fail-closed. A button is published only when all of
+its exact Worker bindings exist:
+
+```text
+GOOGLE_CLIENT_ID       GOOGLE_CLIENT_SECRET
+GITHUB_CLIENT_ID       GITHUB_CLIENT_SECRET
+MICROSOFT_CLIENT_ID    MICROSOFT_CLIENT_SECRET
+APPLE_CLIENT_ID        APPLE_TEAM_ID        APPLE_KEY_ID        APPLE_PRIVATE_KEY
+EMAIL_DELIVERY_TOKEN
+```
+
+Values are installed with `wrangler secret put <NAME>` and are never committed.
 
 ## Why it does not have its own Relying Party
 
@@ -63,6 +103,7 @@ src/itonami/auth/durable.cljs   AuthStore — everything needing read-your-write
 src/itonami/auth/store.cljs     KV credentials (read-mostly) + the DO client
 src/itonami/auth/passkey.cljs   the ceremony, in the order that matters
 src/itonami/auth/oauth.cljs     fixed native client, code exchange, userinfo
+src/itonami/auth/federated.cljs upstream OAuth, Apple token validation, Email
 src/itonami/auth/worker.cljs    routes
 browser/itonami/auth/app.cljs   the page's behaviour (compiled, not hand-written JS)
 pages/itonami/auth/sign_in_page.cljc   the document (jp-go-dds, build-time only)

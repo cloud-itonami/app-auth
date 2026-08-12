@@ -119,6 +119,33 @@
                                                   :value (aget record "value")}
                                              200)))))))))
 
+(defn- op-identity-complete
+  "Resolve or link one verified external subject atomically.
+
+  An unlinked subject never creates an account DID. A live passkey session is
+  the only caller allowed to supply `did`; this keeps Email and OAuth as
+  alternate proofs for an existing passkey-rooted identity rather than silent
+  new identity roots."
+  [state {:keys [key did now-ms]}]
+  (-> (sget state key)
+      (.then
+       (fn [record]
+         (let [bound (when record (aget record "did"))]
+           (cond
+             (and (string? bound) (string? did) (not= bound did))
+             (json-response #js {:ok false :reason "already-bound"} 200)
+
+             (string? bound)
+             (json-response #js {:ok true :did bound :linked false} 200)
+
+             (string? did)
+             (-> (sput state key #js {:did did :linked_at now-ms})
+                 (.then (fn [_]
+                          (json-response #js {:ok true :did did :linked true} 200))))
+
+             :else
+             (json-response #js {:ok false :reason "link-required"} 200)))))))
+
 (defn- op-sign-count
   "WebAuthn L2 §7.2 step 19, decided and recorded in one indivisible step.
 
@@ -232,6 +259,7 @@
       "challenge-consume"  (op-challenge-consume state args)
       "code-put"           (op-code-put state args)
       "code-consume"       (op-code-consume state args)
+      "identity-complete"  (op-identity-complete state args)
       "sign-count"         (op-sign-count state args)
       "session-put"        (op-session-put state args)
       "session-get"        (op-session-get state args)

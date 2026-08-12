@@ -79,14 +79,15 @@
 
 ;; ── step 2-4: verify and issue ──────────────────────────────────────────────
 
-(defn- issue-session!
+(defn issue-session!
   "Mint an opaque token and store only its digest.
 
   The token is 32 random bytes and carries no claims, so there is nothing in
   it to verify offline and nothing to leak by decoding it. That is what makes
   `/v1/logout/all` possible: revocation is deleting a row, not waiting for an
   expiry a signature already promised."
-  [env {:keys [account-did active-did credential-id backup-eligible? backed-up?]}]
+  [env {:keys [account-did active-did credential-id backup-eligible? backed-up?
+               auth-method acr amr authenticated-at]}]
   (let [token (random-b64url 32)]
     (-> (sha256-hex token)
         (.then (fn [digest]
@@ -97,7 +98,11 @@
                                        "activeDid" active-did
                                        "credentialId" credential-id
                                        "backupEligible" (boolean backup-eligible?)
-                                       "backedUp" (boolean backed-up?)}})))
+                                       "backedUp" (boolean backed-up?)
+                                       "authMethod" (or auth-method "webauthn")
+                                       "acr" (or acr "phishing-resistant")
+                                       "amr" (or amr ["webauthn"])
+                                       "authenticatedAt" (or authenticated-at (js/Date.now))}})))
         (.then (fn [res] {:token token :expires-at (aget res "expires_at")})))))
 
 (defn- decide-clone!
@@ -223,6 +228,10 @@
                                      :credential-id (aget v "credentialId")
                                      :backup-eligible? (aget v "backupEligible")
                                      :backed-up? (aget v "backedUp")
+                                     :auth-method (aget v "authMethod")
+                                     :acr (aget v "acr")
+                                     :amr (js->clj (or (aget v "amr") #js ["webauthn"]))
+                                     :authenticated-at (aget v "authenticatedAt")
                                      :expires-at (aget res "expires_at")})))))
         (.catch (fn [_] viewer/anonymous)))
     (js/Promise.resolve viewer/anonymous)))
