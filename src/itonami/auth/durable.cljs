@@ -95,6 +95,30 @@
                  (-> (sdelete state key)
                      (.then (fn [_] (json-response #js {:ok true} 200)))))))))
 
+(defn- op-code-put
+  "Store an authorization code exactly once with its PKCE binding."
+  [state {:keys [key value ttl-ms now-ms]}]
+  (-> (sget state key)
+      (.then (fn [existing]
+               (if (live? existing now-ms)
+                 (json-response #js {:ok false :reason "exists"} 200)
+                 (-> (sput state key #js {:value value
+                                          :expires_at (+ now-ms ttl-ms)})
+                     (.then (fn [_] (json-response #js {:ok true} 200)))))))))
+
+(defn- op-code-consume
+  "Consume before checking PKCE so a wrong verifier also spends the code."
+  [state {:keys [key now-ms]}]
+  (-> (sget state key)
+      (.then (fn [record]
+               (if-not (live? record now-ms)
+                 (json-response #js {:ok false :reason "missing"} 200)
+                 (-> (sdelete state key)
+                     (.then (fn [_]
+                              (json-response #js {:ok true
+                                                  :value (aget record "value")}
+                                             200)))))))))
+
 (defn- op-sign-count
   "WebAuthn L2 §7.2 step 19, decided and recorded in one indivisible step.
 
@@ -206,6 +230,8 @@
     (case op
       "challenge-issue"    (op-challenge-issue state args)
       "challenge-consume"  (op-challenge-consume state args)
+      "code-put"           (op-code-put state args)
+      "code-consume"       (op-code-consume state args)
       "sign-count"         (op-sign-count state args)
       "session-put"        (op-session-put state args)
       "session-get"        (op-session-get state args)

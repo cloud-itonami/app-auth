@@ -28,17 +28,14 @@
 
 (deftest set-cookie-carries-every-attribute-that-matters
   (let [c (viewer/set-cookie "tok" 3600)]
-    (is (.contains c (str "Domain=" config/cookie-domain))
-        "scoped to the registrable parent, or the app plane cannot read it")
+    (is (not (.contains c "Domain=")) "__Host- cookies are host-only")
     (is (.contains c "HttpOnly"))
     (is (.contains c "Secure"))
     (is (.contains c "SameSite=Lax"))
     (is (.contains c "Max-Age=3600")))
-  (testing "clearing keeps the same Domain and Path"
-    ;; A clear written with a different Domain does not delete the cookie; it
-    ;; sets a second, empty one and leaves the live session in place.
+  (testing "clearing keeps the same host-only Path"
     (let [c (viewer/clear-cookie)]
-      (is (.contains c (str "Domain=" config/cookie-domain)))
+      (is (not (.contains c "Domain=")))
       (is (.contains c "Max-Age=0")))))
 
 (deftest safe-return-to-contains-the-redirect
@@ -49,15 +46,28 @@
            (viewer/safe-return-to "https://app.itonami.cloud/kaisya"))))
 
   (testing "refuses everything else, falling back to the mount"
-    (is (= config/mount (viewer/safe-return-to "https://evil.example/")))
-    (is (= config/mount (viewer/safe-return-to "https://evil-itonami.cloud/"))
+    (is (= "/" (viewer/safe-return-to "https://evil.example/")))
+    (is (= "/" (viewer/safe-return-to "https://evil-itonami.cloud/"))
         "a suffix test would admit this one")
-    (is (= config/mount (viewer/safe-return-to "//evil.example"))
+    (is (= "/" (viewer/safe-return-to "//evil.example"))
         "protocol-relative resolves to another origin; starts-with \"/\" admits it")
-    (is (= config/mount (viewer/safe-return-to "http://itonami.cloud/")) "plaintext")
-    (is (= config/mount (viewer/safe-return-to "javascript:alert(1)")))
-    (is (= config/mount (viewer/safe-return-to "")))
-    (is (= config/mount (viewer/safe-return-to nil)))))
+    (is (= "/" (viewer/safe-return-to "http://itonami.cloud/")) "plaintext")
+    (is (= "/" (viewer/safe-return-to "javascript:alert(1)")))
+    (is (= "/" (viewer/safe-return-to "")))
+    (is (= "/" (viewer/safe-return-to nil)))))
+
+(deftest oauth-native-client-is-exactly-contained
+  (let [good {"client_id" (:client-id config/oauth-client)
+              "redirect_uri" (:redirect-uri config/oauth-client)
+              "response_type" "code" "scope" (:scope config/oauth-client)
+              "state" (apply str (repeat 32 "s"))
+              "code_challenge" (apply str (repeat 43 "a"))
+              "code_challenge_method" "S256"}]
+    (is (some? (viewer/oauth-request good)))
+    (is (nil? (viewer/oauth-request (assoc good "redirect_uri"
+                                           "http://127.0.0.1:9999/callback"))))
+    (is (nil? (viewer/oauth-request (assoc good "code_challenge_method" "plain"))))
+    (is (nil? (viewer/oauth-request (assoc good "state" "short"))))))
 
 (deftest credential-record-reads-only-what-a-login-needs
   (let [record {"pubKeyB64" "BASE64" "did" "did:key:z6Mk" "counter" 7
@@ -112,16 +122,17 @@
   (is (= {"valid" false} viewer/anonymous)))
 
 (deftest route-is-mount-relative
-  (is (= "/" (config/route config/mount)))
-  (is (= "/" (config/route (str config/mount "/"))) "one address, not two")
-  (is (= "/v1/session" (config/route (str config/mount "/v1/session"))))
-  (is (nil? (config/route "/kaisya")))
-  (testing "a path that merely starts with the same characters is not ours"
-    (is (nil? (config/route "/authority")))))
+  (is (= "/" (config/route "/")))
+  (is (= "/" (config/route config/legacy-mount)))
+  (is (= "/v1/session" (config/route "/v1/session")))
+  (is (= "/v1/session" (config/route "/auth/v1/session")))
+  (testing "the custom auth host owns its complete path space"
+    (is (= "/kaisya" (config/route "/kaisya")))
+    (is (= "/authority" (config/route "/authority")))))
 
 (deftest endpoints-are-built-from-one-mount
-  (is (= "/auth/v1/session" (config/endpoint :session)))
-  (is (= "/auth/v1/passkey/login/verify" (config/endpoint :login-verify)))
+  (is (= "/v1/session" (config/endpoint :session)))
+  (is (= "/v1/passkey/login/verify" (config/endpoint :login-verify)))
   (testing "every declared path round-trips through route"
     (doseq [[k p] config/paths]
       (is (= p (config/route (config/endpoint k))) (str k)))))

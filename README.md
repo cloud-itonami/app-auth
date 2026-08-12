@@ -1,6 +1,7 @@
 # app-auth
 
-**`app.itonami.cloud/auth` — passkey sign-in for the itonami app plane.** A
+**`auth.itonami.cloud` — passkey sign-in and native-app authorization for the
+itonami app plane.** A
 Cloudflare Worker written in ClojureScript: the ceremony crypto is
 [`kotoba-lang/webauthn`](https://github.com/kotoba-lang/webauthn), the session
 vocabulary is [`kotoba-lang/authentication`](https://github.com/kotoba-lang/authentication),
@@ -16,7 +17,7 @@ replaced rather than ported: see ADR-2608110100.
 
 | | |
 |---|---|
-| **Does** | verify a WebAuthn assertion, decide clone detection, issue and revoke an opaque session |
+| **Does** | verify a WebAuthn assertion, decide clone detection, issue and revoke an opaque browser session, exchange a one-minute Authorization Code + PKCE for a five-minute native-app token |
 | **Does not** | enrol a passkey, mint or hold any signing key, model accounts or organisations |
 
 Enrolment stays at `itonami.cloud/signin/`, which owns custody: registration
@@ -31,7 +32,7 @@ The WebAuthn RP is `itonami.cloud`, inherited — not chosen. Passkeys are scope
 by the browser to one registrable domain and changing it orphans every existing
 credential. `cloud-itonami.edge.webauthn` has registered under `itonami.cloud`
 since 2026-07-30 and already lists `https://app.itonami.cloud` as an allowed
-origin (added for kaisya, 2026-08-07), so **an existing itonami passkey signs in
+origin; `auth.itonami.cloud` uses that same RP, so **an existing itonami passkey signs in
 here with no re-enrolment.** The KV namespace holding those credentials is bound
 by id, not copied, so the two surfaces cannot disagree about who has enrolled.
 
@@ -61,6 +62,7 @@ src/itonami/auth/viewer.cljc    the decisions, with no mechanism attached
 src/itonami/auth/durable.cljs   AuthStore — everything needing read-your-writes
 src/itonami/auth/store.cljs     KV credentials (read-mostly) + the DO client
 src/itonami/auth/passkey.cljs   the ceremony, in the order that matters
+src/itonami/auth/oauth.cljs     fixed native client, code exchange, userinfo
 src/itonami/auth/worker.cljs    routes
 browser/itonami/auth/app.cljs   the page's behaviour (compiled, not hand-written JS)
 pages/itonami/auth/sign_in_page.cljc   the document (jp-go-dds, build-time only)
@@ -75,7 +77,7 @@ twice drifts — silently, and in production.
 ```bash
 npm install
 npm run build      # render the page -> compile the page script -> compile the Worker
-clojure -M:test    # the pure decisions, on the JVM: 52 assertions
+clojure -M:test    # the pure decisions, on the JVM
 nbb test/worker_smoke.cljs   # the BUILT artifact against an in-memory Cloudflare
 npm run deploy
 ```

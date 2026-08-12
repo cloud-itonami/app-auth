@@ -2,7 +2,7 @@
   "name": "itonami-app-auth",
   // The shadow-cljs :esm output directly — no generated shim needed.
   "main": "js/auth-worker.js",
-  "compatibility_date": "2025-03-17",
+  "compatibility_date": "2026-08-12",
   // Deliberately no "nodejs_compat": everything this Worker does — SHA-256
   // digests, random tokens, P-256 signature verification — is WebCrypto
   // (webauthn.adapters.edge). Nothing reaches for node:crypto or Buffer, and
@@ -10,17 +10,12 @@
   // convention.
   "routes": [
     {
-      // A PATH route on the app plane, not a hostname of its own.
-      //
-      // `app.itonami.cloud` is already an allowed WebAuthn origin for RP
-      // `itonami.cloud` (cloud-itonami.edge.webauthn added it for kaisya on
-      // 2026-08-07), so every passkey enrolled at itonami.cloud/signin/ signs
-      // in here with no re-enrolment. A fresh `auth.itonami.cloud` hostname
-      // would work for the RP too, but it would be a fourth public name for
-      // the same service and buy nothing this one does not already have.
-      //
-      // The mount string lives in `itonami.auth.config/mount` as well. These
-      // two must agree; nothing else in the repo repeats it.
+      "pattern": "auth.itonami.cloud",
+      "custom_domain": true
+    },
+    {
+      // Compatibility route. GET /auth moves to the host-level surface; the
+      // old API paths remain during the session migration window.
       "pattern": "app.itonami.cloud/auth*",
       "zone_name": "itonami.cloud"
     }

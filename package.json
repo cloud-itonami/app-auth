@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "AGPL-3.0-or-later",
-  "description": "app.itonami.cloud/auth — passkey sign-in for the itonami app plane (CF Worker, ClojureScript).",
+  "description": "auth.itonami.cloud — Passkey and OAuth PKCE for the itonami app plane (CF Worker, ClojureScript).",
   "type": "module",
   "scripts": {
     "pages": "clojure -M:render-pages",
