@@ -120,12 +120,33 @@ npm install
 npm run build      # render the page -> compile the page script -> compile the Worker
 clojure -M:test    # the pure decisions, on the JVM
 nbb test/worker_smoke.cljs   # the BUILT artifact against an in-memory Cloudflare
-npm run deploy
+npm run deploy     # builds, then uploads
 ```
 
 The order in `build` is load-bearing: the Worker inlines both the rendered
 document and the compiled script with `shadow.resource/inline`, so both must
 exist first.
+
+**Nothing under `js/` or `resources/itonami/auth/` is committed.** A fresh clone
+has no bundle, and that is deliberate. `js/auth-worker.js` used to be tracked,
+which meant a bare `wrangler deploy` uploaded the committed bundle and exited 0
+whether or not it matched `src/` — a source change nobody rebuilt would simply
+not reach production, successfully. Now the entry point is absent until you
+build it, so the failure is loud:
+
+```
+✘ [ERROR] The entry-point file at "js/auth-worker.js" was not found.
+```
+
+and `npm run deploy` builds before it uploads. ADR-2608138000 records the
+change; ADR-2608136200 is the survey that found this repo among 612 wrangler
+configs.
+
+A clone can build on its own — the `:cljs` and `:render-pages` dependencies are
+git coordinates, not `:local/root` siblings, so no superproject checkout is
+required. If you add a dependency, give it a git coordinate too, and read the
+`:git/sha` from the sibling's upstream default branch rather than from whatever
+your local checkout happens to be at.
 
 `worker_smoke.cljs` runs `js/auth-worker.js` — the exact file `wrangler deploy`
 uploads — and gives it the **real** exported `AuthStore` class over a Map-backed

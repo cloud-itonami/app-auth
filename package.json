@@ -11,7 +11,7 @@
     "worker": "shadow-cljs release worker",
     "build": "npm run pages && npm run app && npm run worker",
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy": "npm run build && wrangler deploy",
     "dry-run": "wrangler deploy --dry-run --outdir dist",
     "test": "clojure -M:test",
     "test:worker": "nbb test/worker_smoke.cljs",
