@@ -39,8 +39,12 @@
     #js {:get (fn [k] (js/Promise.resolve (or (.get m k) nil)))
          :put (fn [k v] (.set m k v) (js/Promise.resolve nil))}))
 
-(defn- fake-env [& {:keys [credentials bindings] :or {credentials {} bindings {}}}]
-  (let [store ((aget worker "AuthStore") #js {:storage (fake-storage)} #js {})]
+(defn- fake-env
+  "`:storage` is accepted so a case can seed a record the ops cannot write —
+  the pre-index legacy shape is the only current user."
+  [& {:keys [credentials bindings storage] :or {credentials {} bindings {}}}]
+  (let [storage (or storage (fake-storage))
+        store ((aget worker "AuthStore") #js {:storage storage} #js {})]
     (js/Object.assign
      #js {:AUTH_STORE #js {:idFromName (fn [n] n)
                            :get (fn [_] store)}
@@ -326,6 +330,141 @@
                                    (check "authorization code replay is refused"
                                           (= 400 (.-status replay))))))))))))))))
 
+
+(defn- sso-row
+  "One provider row out of a /v1/methods body.
+
+  Written as a lookup rather than `(some #(when (= id ...) (aget % \"linked\")))`:
+  that form returns nil for a row whose `linked` is false, which is
+  indistinguishable from no row at all — so `(false? ...)` reads as a failure
+  whether the flag was cleared or the provider vanished from the answer."
+  [body id]
+  (first (filter #(= id (aget % "id")) (array-seq (aget body "sso")))))
+
+(defn- session-cookie!
+  "Put a session straight into the object and hand back its cookie header."
+  [env token {:keys [did acr]}]
+  (-> (digest token :hex)
+      (.then (fn [d]
+               (store-call! env {:op "session-put"
+                                 :key (str "session:" d)
+                                 :ttl_ms 60000 :now_ms (js/Date.now)
+                                 :value {"accountDid" did "activeDid" did
+                                         "acr" acr "authMethod" "test"}})))
+      (.then (fn [_] {"cookie" (str "__Host-itonami_session=" token)}))))
+
+(defn- methods! [env headers]
+  (-> (fetch! env "https://auth.itonami.cloud/v1/methods" {:headers headers})
+      (.then (fn [res] (.json res)))))
+
+(defn- unlink! [env headers key]
+  (-> (fetch! env "https://auth.itonami.cloud/v1/methods/unlink"
+              {:method "POST"
+               :headers (js/Object.assign #js {"content-type" "application/json"}
+                                          (clj->js headers))
+               :body (js/JSON.stringify #js {:key key})})
+      (.then (fn [res] (.then (.json res) #(vector (.-status res) %))))))
+
+(defn- case-routes-are-manageable []
+  ;; The whole point of the reverse index: a route that was attached can be
+  ;; SEEN and REMOVED by the person who owns the key. Before it, the store
+  ;; only answered `subject -> did`, so a link could be made and then never
+  ;; enumerated or undone.
+  (let [env (fake-env :bindings {"EMAIL_DELIVERY_TOKEN" "delivery"
+                                 "GOOGLE_CLIENT_ID" "id"
+                                 "GOOGLE_CLIENT_SECRET" "secret"})
+        did "did:key:z6MkRoot"
+        key "identity:google:deadbeef"
+        state (atom {})]
+    (-> (session-cookie! env "passkey-token" {:did did :acr "phishing-resistant"})
+        (.then (fn [headers]
+                 (swap! state assoc :key-rooted headers)
+                 (store-call! env {:op "identity-complete" :key key :did did
+                                   :provider "google" :label "j•••n@gftd.group"})))
+        (.then (fn [linked]
+                 (check "the key attaches the route" (aget linked "linked"))
+                 (methods! env (:key-rooted @state))))
+        (.then (fn [body]
+                 (let [routes (array-seq (aget body "linked"))
+                       route (first routes)]
+                   (check "the attached route is now visible" (= 1 (count routes)))
+                   (check "named for the person who owns it"
+                          (= "Google" (aget route "name")))
+                   (check "carrying only a masked label"
+                          (= "j•••n@gftd.group" (aget route "label")))
+                   (check "and the key may manage it" (true? (aget body "canManage")))
+                   (check "the provider row says it is linked"
+                          (true? (aget (sso-row body "google") "linked")))
+                   (swap! state assoc :route-key (aget route "key")))
+                 (session-cookie! env "route-token" {:did did :acr "single-factor"})))
+        (.then (fn [headers]
+                 (swap! state assoc :single-factor headers)
+                 (methods! env headers)))
+        (.then (fn [body]
+                 (check "a session a route issued sees the same list"
+                        (= 1 (.-length (aget body "linked"))))
+                 (check "but is told it may not change it"
+                        (false? (aget body "canManage")))
+                 (unlink! env (:single-factor @state) (:route-key @state))))
+        (.then (fn [[status body]]
+                 (check "and is refused when it tries, with a reason it can act on"
+                        (and (= 403 status) (= "passkey_required" (aget body "error"))))
+                 (unlink! env (:key-rooted @state) "identity:google:notmine")))
+        (.then (fn [[status body]]
+                 ;; Missing and not-yours answer identically, so holding any
+                 ;; session cannot confirm whether a guessed key is attached
+                 ;; to somebody. An Email route's key is a digest of an
+                 ;; address the guesser may already know.
+                 (check "a key this account does not hold is simply not linked"
+                        (and (= 404 status) (= "not_linked" (aget body "error"))))
+                 (unlink! env (:key-rooted @state) (:route-key @state))))
+        (.then (fn [[status _]]
+                 (check "the key detaches its own route" (= 200 status))
+                 (methods! env (:key-rooted @state))))
+        (.then (fn [body]
+                 (check "and the route is gone from the list"
+                        (zero? (.-length (aget body "linked"))))
+                 (check "and from the provider row"
+                        (false? (aget (sso-row body "google") "linked")))
+                 (store-call! env {:op "identity-complete" :key (:route-key @state)})))
+        (.then (fn [resolved]
+                 ;; Detaching removed the forward record too, not only the
+                 ;; index entry — otherwise the route would keep signing in
+                 ;; while claiming to be detached.
+                 (check "a detached route no longer resolves to the account"
+                        (= "link-required" (aget resolved "reason"))))))))
+
+(defn- case-legacy-link-heals []
+  ;; A route linked before the index existed has no entry, so it would be
+  ;; invisible and un-detachable forever. The next sign-in through it writes
+  ;; the entry, without a migration batch that must land before the code
+  ;; reading the new shape.
+  (let [storage (fake-storage)
+        env (fake-env :storage storage)
+        did "did:key:z6MkLegacy"
+        key "identity:github:0ldl1nk"]
+    (-> (.put storage key #js {:did did :linked_at 1700000000000})
+        (.then (fn [_] (store-call! env {:op "identity-list" :did did})))
+        (.then (fn [before]
+                 (check "a pre-index route is invisible to start with"
+                        (zero? (.-length (aget before "routes"))))
+                 ;; A sign-in through it: no did (nothing is being linked),
+                 ;; but the caller knows which provider it is.
+                 (store-call! env {:op "identity-complete" :key key
+                                   :provider "github" :label "o•••t"})))
+        (.then (fn [resolved]
+                 (check "the sign-in still resolves to the same account"
+                        (and (= did (aget resolved "did"))
+                             (false? (aget resolved "linked"))))
+                 (store-call! env {:op "identity-list" :did did})))
+        (.then (fn [after]
+                 (let [route (first (array-seq (aget after "routes")))]
+                   (check "and it is now visible" (some? route))
+                   (check "named by the provider the sign-in knew"
+                          (= "github" (aget route "provider")))
+                   (check "keeping the moment it was originally attached"
+                          (= 1700000000000 (aget route "linkedAt")))))))))
+
 ;; ── run ─────────────────────────────────────────────────────────────────────
 
 (defn- run []
@@ -341,10 +480,22 @@
       (.then #(run-case "health" case-health))
       (.then #(run-case "federated methods and linking" case-federated-methods-and-linking))
       (.then #(run-case "OAuth PKCE" case-oauth-pkce-is-single-use))
+      (.then #(run-case "routes are visible and removable" case-routes-are-manageable))
+      (.then #(run-case "a legacy link heals its index" case-legacy-link-heals))
       (.then (fn [_]
                (if (zero? @failures)
                  (println "\nworker smoke: all checks passed")
                  (do (println "\nworker smoke:" @failures "FAILED")
-                     (set! (.-exitCode js/process) 1)))))))
+                     (set! (.-exitCode js/process) 1)))))
+      ;; A case that THROWS must not look like a case that passed. Without
+      ;; this the chain rejects, the summary above never runs, and the script
+      ;; exits 0 having printed some oks and no verdict — the failure mode
+      ;; this whole file exists to catch, in the file itself. Observed while
+      ;; adding the routes cases: breaking the reverse index on purpose
+      ;; produced one FAIL line, no summary, and a successful exit.
+      (.catch (fn [e]
+                (println "\nworker smoke: ABORTED —" (or (aget e "message") e))
+                (println "worker smoke: no verdict; treat as failed")
+                (set! (.-exitCode js/process) 1)))))
 
 (run)

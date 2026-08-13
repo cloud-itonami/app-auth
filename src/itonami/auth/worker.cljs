@@ -154,8 +154,24 @@
       (and (= method "GET") (= path (p :metadata)))
       (js/Promise.resolve (json oauth/metadata 200))
 
+      ;; Configuration AND, for a live session, the routes attached to that
+      ;; key. One round trip: the page draws the key and what hangs off it in
+      ;; the same paint, so a route never appears a frame after the button
+      ;; that would detach it.
       (and (= method "GET") (= path (p :methods)))
-      (js/Promise.resolve (json (federated/method-status env) 200))
+      (-> (passkey/resolve-session! env (cookie-header request))
+          (.then #(federated/methods! env %))
+          (.then respond))
+
+      (and (= method "POST") (= path (p :method-unlink)))
+      (-> (js/Promise.all #js [(read-json request)
+                               (passkey/resolve-session! env (cookie-header request))])
+          (.then (fn [values]
+                   (let [body (aget values 0) session (aget values 1)]
+                     (if-not (map? body)
+                       (json {"ok" false "error" "malformed request"} 400)
+                       (.then (federated/unlink! env session (get body "key"))
+                              respond))))))
 
       (and (= method "GET") (provider-from path (p :sso-start)))
       (let [provider (provider-from path (p :sso-start))]

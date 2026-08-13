@@ -17,7 +17,7 @@ replaced rather than ported: see ADR-2608110100.
 
 | | |
 |---|---|
-| **Does** | verify a WebAuthn assertion, link a verified Apple/Google/GitHub/Microsoft/Email subject to that passkey DID, issue and revoke an opaque browser session, exchange a one-minute Authorization Code + PKCE for a five-minute native-app token |
+| **Does** | verify a WebAuthn assertion, attach/list/detach a verified Apple/Google/GitHub/Microsoft/Email route on that passkey DID, issue and revoke an opaque browser session, exchange a one-minute Authorization Code + PKCE for a five-minute native-app token |
 | **Does not** | enrol a passkey, mint or hold an itonami signing key, create or merge an identity from email equality |
 
 Enrolment stays at `itonami.cloud/signin/`, which owns custody: registration
@@ -26,15 +26,54 @@ has no KEK binding, so it cannot sign as any user — by construction, not by
 policy.** A second enrolment path would have required that secret here and
 given the same custody two implementations.
 
-## Email and SSO are alternate proofs, not new roots
+## The key is the root; Email and SSO are routes attached to it
 
-The first sign-in remains a passkey ceremony. While that session is live, a
-person may link Apple, Google, GitHub, Microsoft, or Email. A later verified
-subject resolves to the same DID and may issue a `single-factor` session. An
-unknown subject is sent back with `link_required`; it never creates a DID, and
-an already-linked subject cannot be rebound to another DID. These decisions
-are atomic in `AuthStore`, so two concurrent callbacks cannot claim one
-subject for different accounts.
+A passkey — held in a credential manager, which is where
+`itonami.auth.config/key-managers` names 1Password, Bitwarden, iCloud
+キーチェーン and Google パスワードマネージャー on the page itself — is what an
+account IS. Email and SSO are **routes**: a way back in when a device is gone,
+and a second way to sign in afterwards. Three rules keep that ordering true
+rather than merely intended.
+
+**Only the key may re-arrange the routes.** `viewer/key-rooted?` admits a
+session only when the passkey itself authenticated it (`acr`
+`phishing-resistant`). A `single-factor` session signs in, reaches the app and
+holds a native-app token, but cannot attach or detach anything. Without this,
+ten minutes of inbox access is enough to attach a provider the owner never
+chose — and, before the index below existed, could not see or remove.
+
+**Every route is visible.** The forward record answers `subject -> did`, which
+is all a sign-in needs and nothing an owner can act on: there is no way to ask
+it what a given key answers to. `AuthStore` therefore writes
+`did-identity:<did>:<key>` in the same object turn as the link, for the reason
+`session-put` writes its own index inline — a record without its index is a
+record the management surface cannot see, and an invisible route is worse than
+no route. `GET /v1/methods` returns them for a live session. Routes linked
+before the index existed are healed on their next sign-in rather than by a
+migration batch, the way `cloud-itonami.account/adopt-legacy-credential` does
+it on the enrolment plane.
+
+**Every route can be removed.** `POST /v1/methods/unlink` deletes both halves
+atomically, and the stored record's own `did` decides — never the caller's
+claim. Missing and not-yours are the same answer, so holding any session
+cannot confirm whether a guessed key belongs to somebody. Detaching the *last*
+route is allowed: the key is the root and a route is not, and refusing would
+say otherwise (`cloud-itonami.account/detach-email` draws the line in the same
+place, and refuses only for the last passkey).
+
+An unknown subject is still sent back with `link_required`; it never creates a
+DID, and an already-linked subject cannot be rebound to another DID. These
+decisions are atomic in `AuthStore`, so two concurrent callbacks cannot claim
+one subject for different accounts.
+
+### What this Worker still cannot close
+
+Recovery ends here at a link, not at a new passkey: with no KEK binding this
+Worker cannot enrol, so the signed-in view sends someone to
+`itonami.cloud/signin/` for a spare key. And SSO subjects are held only here —
+the enrolment plane's account record tracks `:account/emails` but has no
+equivalent for upstream providers, so its `recovery-posture` does not count
+them. Both are noted rather than papered over.
 
 Every provider uses a five-minute, single-use state and Authorization Code
 flow. Google, GitHub, and Microsoft use PKCE S256 in addition to their Worker

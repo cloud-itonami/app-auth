@@ -41,7 +41,8 @@
   externs.
 
   ClojureScript only."
-  (:require [itonami.auth.viewer :as viewer]
+  (:require [clojure.string :as str]
+            [itonami.auth.viewer :as viewer]
             [webauthn.adapters.edge :as edge]))
 
 (defn- storage [state] (aget state "storage"))
@@ -119,14 +120,44 @@
                                                   :value (aget record "value")}
                                              200)))))))))
 
+(defn- identity-index-key
+  "The reverse index entry for one route. Mirrors `did-session:` — same shape,
+  same reason."
+  [did key]
+  (str "did-identity:" did ":" key))
+
 (defn- op-identity-complete
   "Resolve or link one verified external subject atomically.
 
-  An unlinked subject never creates an account DID. A live passkey session is
-  the only caller allowed to supply `did`; this keeps Email and OAuth as
-  alternate proofs for an existing passkey-rooted identity rather than silent
-  new identity roots."
-  [state {:keys [key did now-ms]}]
+  An unlinked subject never creates an account DID. A key-rooted session is
+  the only caller allowed to supply `did` (`itonami.auth.viewer/key-rooted?`);
+  this keeps Email and OAuth as alternate proofs for an existing
+  passkey-rooted identity rather than silent new identity roots.
+
+  ## The index is written here, not by the caller
+
+  The forward record answers `subject -> did`, which is all a sign-in needs
+  and nothing an owner can act on: there is no way to ask it what a given key
+  answers to. So a route could be attached and then neither seen nor removed
+  — an account accumulating doors nobody can enumerate.
+
+  `did-identity:<did>:<key>` closes that, and it is written in the same object
+  turn as the link for exactly the reason `op-session-put` gives: a record
+  that exists without its index is a record the management surface cannot see,
+  and an invisible route is worse than no route.
+
+  ## A legacy link heals on its next sign-in
+
+  Routes linked before this index existed have no entry. Rather than a
+  migration batch — which must run before the code that reads the new shape
+  deploys, and in between reports an account's real routes as none — the
+  `bound` branch writes the entry it finds missing. The enrolment plane makes
+  the same call for pre-D3 credentials
+  (`cloud-itonami.account/adopt-legacy-credential`).
+
+  `linked_at` is taken from the existing record so healing does not restamp an
+  attachment as though it had just been made."
+  [state {:keys [key did provider label now-ms]}]
   (-> (sget state key)
       (.then
        (fn [record]
@@ -136,15 +167,78 @@
              (json-response #js {:ok false :reason "already-bound"} 200)
 
              (string? bound)
-             (json-response #js {:ok true :did bound :linked false} 200)
+             (-> (sput state (identity-index-key bound key)
+                       #js {:provider (or (aget record "provider") provider)
+                            :label (or (aget record "label") label)
+                            :linked_at (or (aget record "linked_at") now-ms)})
+                 (.then (fn [_]
+                          (json-response #js {:ok true :did bound :linked false} 200))))
 
              (string? did)
-             (-> (sput state key #js {:did did :linked_at now-ms})
+             (-> (sput state key #js {:did did :linked_at now-ms
+                                      :provider provider :label label})
+                 (.then (fn [_]
+                          (sput state (identity-index-key did key)
+                                #js {:provider provider :label label
+                                     :linked_at now-ms})))
                  (.then (fn [_]
                           (json-response #js {:ok true :did did :linked true} 200))))
 
              :else
              (json-response #js {:ok false :reason "link-required"} 200)))))))
+
+(defn- op-identity-list
+  "Every route attached to one account. Reads the index, not a scan, so the
+  cost is proportional to the account's own routes."
+  [state {:keys [did]}]
+  (if-not (string? did)
+    (js/Promise.resolve (json-response #js {:ok false :reason "no-did"} 400))
+    (let [prefix (identity-index-key did "")]
+      (-> (slist state prefix)
+          (.then (fn [rows]
+                   (let [out (atom [])]
+                     (js-invoke rows "forEach"
+                                (fn [v k]
+                                  (swap! out conj
+                                         #js {:key (subs k (count prefix))
+                                              :provider (aget v "provider")
+                                              :label (aget v "label")
+                                              :linkedAt (aget v "linked_at")})))
+                     (json-response #js {:ok true :routes (to-array @out)} 200))))))))
+
+(defn- op-identity-unlink
+  "Detach one route from the key.
+
+  The stored record's own `did` decides, never the caller's claim about which
+  account the key belongs to. Both halves are deleted in one object turn, for
+  the same reason both are written in one: an index entry outliving its
+  forward record is a route the owner is told they have and cannot use, and a
+  forward record outliving its index entry is one they cannot remove twice.
+
+  **Missing and not-yours are the same answer.** Telling them apart would let
+  anyone holding any session confirm whether a guessed key — and an Email
+  route's key is a digest of an address someone may already know — is attached
+  to somebody. `itonami.auth.passkey/refuse` collapses its cases for the same
+  reason.
+
+  **Removing the last route is allowed.** The key is the root; a route is not,
+  and refusing here would say otherwise. The enrolment plane draws the line in
+  the same place: `cloud-itonami.account/detach-email` permits detaching the
+  last address and `revocation-problems` refuses only the last passkey."
+  [state {:keys [key did]}]
+  (if-not (and (string? key) (string? did)
+               (str/starts-with? key "identity:"))
+    (js/Promise.resolve (json-response #js {:ok false :reason "not-linked"} 200))
+    (-> (sget state key)
+        (.then (fn [record]
+                 (let [bound (when record (aget record "did"))]
+                   (if-not (and (string? bound) (= bound did))
+                     (json-response #js {:ok false :reason "not-linked"} 200)
+                     (-> (js/Promise.all
+                          #js [(sdelete state key)
+                               (sdelete state (identity-index-key did key))])
+                         (.then (fn [_]
+                                  (json-response #js {:ok true} 200)))))))))))
 
 (defn- op-sign-count
   "WebAuthn L2 §7.2 step 19, decided and recorded in one indivisible step.
@@ -252,6 +346,8 @@
         args {:key (aget body "key")
               :value (aget body "value")
               :did (aget body "did")
+              :provider (aget body "provider")
+              :label (aget body "label")
               :ttl-ms (aget body "ttl_ms")
               :now-ms (aget body "now_ms")}]
     (case op
@@ -260,6 +356,8 @@
       "code-put"           (op-code-put state args)
       "code-consume"       (op-code-consume state args)
       "identity-complete"  (op-identity-complete state args)
+      "identity-list"      (op-identity-list state args)
+      "identity-unlink"    (op-identity-unlink state args)
       "sign-count"         (op-sign-count state args)
       "session-put"        (op-session-put state args)
       "session-get"        (op-session-get state args)

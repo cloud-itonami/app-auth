@@ -55,6 +55,48 @@
   origin boundary with Authorization Code + PKCE, never a shared cookie."
   "itonami.cloud")
 
+(def key-rooted-acr
+  "The `acr` a passkey assertion issues. Email and SSO issue `single-factor`.
+
+  Named once because three places read it as a decision and not as a label:
+  `itonami.auth.passkey/issue-session!` writes it, `itonami.auth.viewer/viewer`
+  defaults it, and `itonami.auth.viewer/key-rooted?` is the rule that lets a
+  session change what is attached to the key. A literal repeated in three
+  files is a rule that can be relaxed in one of them by accident."
+  "phishing-resistant")
+
+(def single-factor-acr
+  "What an Email or SSO proof issues. It signs in; it does not manage the key."
+  "single-factor")
+
+(def provider-labels
+  "How each route is named to the person who owns it.
+
+  Here rather than in `itonami.auth.federated` because the page needs the same
+  names and `federated` is Worker-only (it carries the client secrets' env
+  binding names). The page used to hold its own copy of this list; that is the
+  drift this namespace exists to prevent."
+  {"apple" "Apple"
+   "google" "Google"
+   "github" "GitHub"
+   "microsoft" "Microsoft"
+   "email" "Email"})
+
+(def sso-order
+  "The order the upstream providers are offered in. Fixed, so the row does not
+  reshuffle between renders — `federated/providers` is a map, and map order is
+  not a contract."
+  ["apple" "google" "github" "microsoft"])
+
+(def key-managers
+  "The credential managers a passkey for this service is expected to live in.
+
+  Named in the UI on purpose. A passkey is only as recoverable as the vault
+  holding it, and \"パスキーを作る\" tells someone nothing about where it will
+  end up — which is how a device-bound credential gets created by someone who
+  believed they were creating a synced one."
+  ["1Password" "Bitwarden" "iCloud キーチェーン" "Google パスワードマネージャー"])
+
 (def session-ttl-ms (* 1000 60 60 12))
 (def challenge-ttl-ms (* 1000 60 5))
 (def authorization-code-ttl-ms (* 1000 60))
@@ -96,6 +138,11 @@
    :email-start   "/v1/email/start"
    :email-verify  "/v1/email/verify"
    :methods       "/v1/methods"
+   ;; Detaching a route. There is no `/v1/methods/link`: linking is what the
+   ;; SSO and Email flows already do when they finish inside a key-rooted
+   ;; session, and a second way in would be a second place to get the
+   ;; `key-rooted?` check wrong.
+   :method-unlink "/v1/methods/unlink"
    :session       "/v1/session"
    ;; No `/v1/credentials` inventory yet. Listing every passkey an account
    ;; holds needs the account record, which lives in the enrolment surface's
