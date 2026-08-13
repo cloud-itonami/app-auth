@@ -105,8 +105,29 @@
 (def email-token-ttl-ms (* 1000 60 10))
 
 (def oauth-client
+  "The one public native client, and the one loopback address it may land on.
+
+  `localhost`, NOT `127.0.0.1`, and the difference is not cosmetic.
+
+  RFC 8252 §7.3 prefers the IP literal for native apps in general, and this
+  entry held it for that reason. It cannot here. The client is a desktop app
+  whose sign-in is WebAuthn, and a WebAuthn RP ID must be a registrable domain
+  — an IP literal is not one and never becomes one. So cloud-itonami-app
+  serves `localhost:1338` (`:webauthn-rp-id \"localhost\"`), its window loads
+  that origin, and its callback must land there too: the session cookie is set
+  by whatever origin the callback hits, and a cookie in the wrong jar is a
+  sign-in that succeeds and then cannot be read.
+
+  While this said `127.0.0.1`, the two halves disagreed and /authorize
+  answered `invalid_request` for every real attempt — the app asked to come
+  back where it lives, and this said no. One address, chosen by the constraint
+  that has no alternative.
+
+  Deliberately still a single exact string. Accepting both loopback forms
+  would give authorization codes a second place to land for the benefit of an
+  origin where the app's own sign-in cannot work anyway."
   {:client-id "cloud-itonami-app-native"
-   :redirect-uri "http://127.0.0.1:1338/api/auth/itonami/callback"
+   :redirect-uri "http://localhost:1338/api/auth/itonami/callback"
    :scope "identity:read"})
 
 (def enrolment-url
