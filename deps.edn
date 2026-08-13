@@ -9,11 +9,24 @@
  ;; Durable Objects, so they stop being unfixable here.
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}}
  :aliases
- {;; Worker + browser build classpath. Both siblings are :local/root rather
-  ;; than git coordinates because `authentication`'s own deps.edn resolves
-  ;; eight siblings through :local/root, and tools.deps forbids :local/root
-  ;; inside a :git/sha dependency — the same constraint net-kotobase/authn
-  ;; records. So this build requires the superproject west checkout.
+ {;; Worker + browser build classpath. Git coordinates, not :local/root, so a
+  ;; pristine clone can build — which is what makes the deploy path honest:
+  ;; `npm run deploy` builds first, and a build that cannot resolve what it
+  ;; needs fails loudly instead of shipping whatever bundle happens to be
+  ;; committed (ADR-2608138000; the survey is ADR-2608136200).
+  ;;
+  ;; This comment used to say the opposite — that `authentication` resolved
+  ;; eight siblings through :local/root and so forced :local/root here. That
+  ;; stopped being true upstream: kotoba-lang/authentication@fe03e31 resolves
+  ;; every one of its dependencies through :git/url + :git/sha. The constraint
+  ;; was real when it was written and was fixed elsewhere without this repo
+  ;; noticing. Re-read the sibling's default branch before believing it again.
+  ;;
+  ;; Every :git/sha below was read from the sibling's upstream default-branch
+  ;; tip through the API, never from a local checkout — a pin taken from a
+  ;; diverged working tree is the four-states failure of ADR-2608135200. Each
+  ;; :git/url is spelled out rather than inferred from the coordinate so
+  ;; resolution does not depend on a GitHub rename redirect still being served.
   :cljs
   {:extra-paths ["browser"]
    :extra-deps {thheller/shadow-cljs {:mvn/version "2.28.20"}
@@ -22,13 +35,15 @@
                 ;; credential actually proves. This repo verifies ceremonies;
                 ;; it does not re-derive how.
                 io.github.kotoba-lang/webauthn
-                {:local/root "../../kotoba-lang/webauthn"}
+                {:git/url "https://github.com/kotoba-lang/webauthn.git"
+                 :git/sha "15b2610652390298b5009697c9efba61e0745911"}
                 ;; authentication.identity/session-record — the session shape
                 ;; (opaque token, only its SHA-256 digest ever stored). Shared
                 ;; so the itonami app plane and authn.kotobase.net describe a
                 ;; session with one vocabulary.
                 io.github.kotoba-lang/authentication
-                {:local/root "../../kotoba-lang/authentication"}}}
+                {:git/url "https://github.com/kotoba-lang/authentication.git"
+                 :git/sha "fe03e31c38c36f70e8f1484221e0c6e0d9dea925"}}}
 
   ;; Build-time page rendering (scripts/render_pages.clj). The design system
   ;; is scoped here and never reaches the Worker bundle: a shell that renders
@@ -37,7 +52,8 @@
   :render-pages
   {:extra-paths ["pages" "scripts"]
    :extra-deps {io.github.kotoba-lang/jp-go-digital-design-system
-                {:local/root "../../kotoba-lang/jp-go-digital-design-system"}}
+                {:git/url "https://github.com/kotoba-lang/jp-go-digital-design-system.git"
+                 :git/sha "0a0218052b0d563057341a1c2ab310045052bd23"}}
    :main-opts ["-m" "render-pages"]}
 
   ;; Pure-core tests on the JVM: cookies, viewer payload, return_to
