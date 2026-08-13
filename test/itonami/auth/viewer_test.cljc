@@ -7,7 +7,8 @@
   padding, a clone baseline that could be lowered. They are cheap to check and
   expensive to discover in production, which is the whole reason the decisions
   live in `.cljc` and the mechanism does not."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [itonami.auth.config :as config]
             [itonami.auth.viewer :as viewer]))
 
@@ -64,10 +65,46 @@
               "code_challenge" (apply str (repeat 43 "a"))
               "code_challenge_method" "S256"}]
     (is (some? (viewer/oauth-request good)))
+    ;; The registered address is `localhost`, because the client signs in with
+    ;; WebAuthn and an IP literal cannot be a WebAuthn RP ID. Pinned here so
+    ;; the reason travels with the value: while this was `127.0.0.1`, every
+    ;; real authorization attempt got `invalid_request`, since the app asks to
+    ;; come back to the origin it actually serves.
+    (is (= "http://localhost:1338/api/auth/itonami/callback"
+           (:redirect-uri config/oauth-client)))
+    (is (nil? (viewer/oauth-request (assoc good "redirect_uri"
+                                           "http://127.0.0.1:1338/api/auth/itonami/callback")))
+        "the loopback IP form is not a second registered address")
     (is (nil? (viewer/oauth-request (assoc good "redirect_uri"
                                            "http://127.0.0.1:9999/callback"))))
     (is (nil? (viewer/oauth-request (assoc good "code_challenge_method" "plain"))))
     (is (nil? (viewer/oauth-request (assoc good "state" "short"))))))
+
+(deftest the-registered-callback-is-an-address-the-client-can-actually-serve
+  ;; The bug this pins was invisible to every test that existed, in either
+  ;; repository, because each one agreed with itself: the smoke test built its
+  ;; request from the same config it was checking, and cloud-itonami-app
+  ;; asserted its own origin without knowing what was registered here. A
+  ;; disagreement between two repositories is not something either one's
+  ;; fixtures can see.
+  ;;
+  ;; So assert the CONSTRAINT rather than the string. The client signs in with
+  ;; WebAuthn; a WebAuthn RP ID must be a registrable domain and an IP literal
+  ;; is not one; therefore the client cannot serve an IP literal, therefore
+  ;; nothing keyed to one can be its callback. Written as a property because
+  ;; the next person to reach for `127.0.0.1` here — RFC 8252 §7.3 does
+  ;; recommend it for native apps in general — should be stopped by the reason
+  ;; and not merely by a diff.
+  (let [uri (:redirect-uri config/oauth-client)
+        host (second (re-find #"^http://([^:/]+)" uri))]
+    (is (not (re-matches #"\d+\.\d+\.\d+\.\d+" host))
+        (str "an IP literal cannot be a WebAuthn RP ID, so the client cannot "
+             "serve " host " and cannot receive a callback there"))
+    (is (= "localhost" host))
+    (is (str/starts-with? uri "http://")
+        "loopback is the one place plaintext is admissible, and only there")
+    (is (str/includes? uri ":1338/")
+        "the port the client actually listens on")))
 
 (deftest credential-record-reads-only-what-a-login-needs
   (let [record {"pubKeyB64" "BASE64" "did" "did:key:z6Mk" "counter" 7

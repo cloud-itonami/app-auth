@@ -289,7 +289,7 @@
                     (let [authorize (str "https://auth.itonami.cloud/authorize"
                                          "?client_id=cloud-itonami-app-native"
                                          "&redirect_uri=" (js/encodeURIComponent
-                                                            "http://127.0.0.1:1338/api/auth/itonami/callback")
+                                                            "http://localhost:1338/api/auth/itonami/callback")
                                          "&response_type=code&scope=identity%3Aread"
                                          "&state=" state
                                          "&code_challenge=" challenge
@@ -305,7 +305,7 @@
                           form (str "grant_type=authorization_code"
                                     "&client_id=cloud-itonami-app-native"
                                     "&redirect_uri=" (js/encodeURIComponent
-                                                       "http://127.0.0.1:1338/api/auth/itonami/callback")
+                                                       "http://localhost:1338/api/auth/itonami/callback")
                                     "&code=" (js/encodeURIComponent code)
                                     "&code_verifier=" verifier)
                           exchange (fn []
