@@ -136,3 +136,118 @@
   (testing "every declared path round-trips through route"
     (doseq [[k p] config/paths]
       (is (= p (config/route (config/endpoint k))) (str k)))))
+
+;; ── the key, and the routes that hang off it ────────────────────────────────
+
+(deftest only-the-key-may-rearrange-the-routes
+  (let [passkey {"valid" true "acr" config/key-rooted-acr "accountDid" "did:key:z6Mk"}
+        by-route {"valid" true "acr" config/single-factor-acr "accountDid" "did:key:z6Mk"}]
+    (is (true? (viewer/key-rooted? passkey)))
+
+    (testing "a session a route issued signs in but does not manage"
+      ;; The escalation this closes: ten minutes of inbox access is enough to
+      ;; attach a second provider, and before the reverse index existed the
+      ;; owner could neither see that attachment nor remove it.
+      (is (false? (viewer/key-rooted? by-route))))
+
+    (testing "no session, and a session with no acr at all"
+      (is (false? (viewer/key-rooted? viewer/anonymous)))
+      (is (false? (viewer/key-rooted? {"valid" true})))
+      (is (false? (viewer/key-rooted? nil))))
+
+    (testing "valid alone is never enough"
+      (is (false? (viewer/key-rooted? {"valid" false "acr" config/key-rooted-acr}))))))
+
+(deftest mask-handle-is-recognisable-but-not-readable
+  (is (= "j•••n@gftd.group" (viewer/mask-handle "jun@gftd.group")))
+  (is (= "j•••i@example.com" (viewer/mask-handle "junkawasaki@example.com")))
+
+  (testing "the mask is a fixed width, so it does not publish the length"
+    (is (= (count (viewer/mask-handle "ab...........yz@e.com"))
+           (count (viewer/mask-handle "abyz@e.com")))))
+
+  (testing "the domain survives, because that is what tells two routes apart"
+    (is (.endsWith (viewer/mask-handle "a@one.example") "@one.example"))
+    (is (not= (viewer/mask-handle "jun@one.example")
+              (viewer/mask-handle "jun@two.example"))))
+
+  (testing "a bare handle (GitHub login) has no domain half"
+    (is (= "o•••e" (viewer/mask-handle "octocatlike")))
+    (is (= "a•" (viewer/mask-handle "ab")))
+    (is (= "•" (viewer/mask-handle "a"))))
+
+  (testing "nothing usable is nil, and the caller shows the provider alone"
+    (is (nil? (viewer/mask-handle nil)))
+    (is (nil? (viewer/mask-handle "")))
+    (is (nil? (viewer/mask-handle "   ")))))
+
+(deftest routes-view-is-stable-and-nameable
+  (let [rows [{"key" "identity:google:bbb" "provider" "google"
+               "label" "j•••n@gftd.group" "linkedAt" 2}
+              {"key" "identity:email:aaa" "provider" "email"
+               "label" "j•••n@gftd.group" "linkedAt" 1}]
+        out (viewer/routes-view rows)]
+    (testing "ordered by provider, not by the digest storage happens to return"
+      (is (= ["email" "google"] (mapv #(get % "provider") out))))
+
+    (testing "each row carries the name the page shows"
+      (is (= ["Email" "Google"] (mapv #(get % "name") out))))
+
+    (testing "an unknown provider is named by its id rather than dropped-through"
+      (is (= "gitlab" (-> (viewer/routes-view [{"key" "identity:gitlab:x"
+                                                "provider" "gitlab"}])
+                          first (get "name")))))
+
+    (testing "a row with no provider is dropped, not shown as an unnameable route"
+      ;; The pre-index legacy shape. A detach button beside a route nobody can
+      ;; name is worse than showing nothing; the store heals it on the next
+      ;; sign-in through that route.
+      (is (empty? (viewer/routes-view [{"key" "identity:google:x"}])))
+      (is (empty? (viewer/routes-view [{"provider" "google"}])))
+      (is (empty? (viewer/routes-view nil))))
+
+    (testing "an absent label is nil, never the empty string"
+      (is (nil? (-> (viewer/routes-view [{"key" "k" "provider" "email" "label" ""}])
+                    first (get "label")))))))
+
+(deftest methods-view-answers-what-is-attached
+  (let [status {"email" true
+                "sso" [{"id" "google" "name" "Google" "configured" true}
+                       {"id" "apple" "name" "Apple" "configured" false}]}
+        routes [{"key" "identity:google:bbb" "provider" "google" "linkedAt" 2}]]
+
+    (testing "a key-rooted session sees what is attached and may change it"
+      (let [v (viewer/methods-view {:status status :routes routes :manage? true})]
+        (is (true? (get v "canManage")))
+        (is (= ["google"] (mapv #(get % "provider") (get v "linked"))))
+        (is (true? (-> v (get "sso") first (get "linked"))))
+        (is (false? (-> v (get "sso") second (get "linked"))))
+        (is (false? (get v "emailLinked")))))
+
+    (testing "a single-factor session sees the same list and cannot change it"
+      (let [v (viewer/methods-view {:status status :routes routes :manage? false})]
+        (is (false? (get v "canManage")))
+        (is (= 1 (count (get v "linked"))))))
+
+    (testing "an anonymous caller gets configuration and an empty list"
+      ;; Empty because there is no account to answer about, not because an
+      ;; answer is withheld — nothing in this shape depends on a secret.
+      (let [v (viewer/methods-view {:status status})]
+        (is (false? (get v "canManage")))
+        (is (= [] (get v "linked")))
+        (is (false? (get v "emailLinked")))
+        (is (every? #(false? (get % "linked")) (get v "sso")))))
+
+    (testing "configuration survives untouched"
+      (let [v (viewer/methods-view {:status status :routes routes :manage? true})]
+        (is (true? (get v "email")))
+        (is (true? (-> v (get "sso") first (get "configured"))))))))
+
+(deftest email-is-a-route-like-any-other
+  (let [v (viewer/methods-view
+           {:status {"email" true "sso" []}
+            :routes [{"key" "identity:email:aaa" "provider" "email"
+                      "label" "j•••n@gftd.group" "linkedAt" 1}]
+            :manage? true})]
+    (is (true? (get v "emailLinked")))
+    (is (= "Email" (-> v (get "linked") first (get "name"))))))

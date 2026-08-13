@@ -100,7 +100,7 @@
                                        "backupEligible" (boolean backup-eligible?)
                                        "backedUp" (boolean backed-up?)
                                        "authMethod" (or auth-method "webauthn")
-                                       "acr" (or acr "phishing-resistant")
+                                       "acr" (or acr config/key-rooted-acr)
                                        "amr" (or amr ["webauthn"])
                                        "authenticatedAt" (or authenticated-at (js/Date.now))}})))
         (.then (fn [res] {:token token :expires-at (aget res "expires_at")})))))

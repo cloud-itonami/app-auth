@@ -11,26 +11,25 @@
             [itonami.auth.viewer :as viewer]))
 
 (def providers
-  {:google {:label "Google"
-            :client-id "GOOGLE_CLIENT_ID" :client-secret "GOOGLE_CLIENT_SECRET"
+  "The upstream proofs, by the id they are addressed with. Display names are
+  NOT here — they are `itonami.auth.config/provider-labels`, which the page is
+  compiled against too."
+  {:google {:client-id "GOOGLE_CLIENT_ID" :client-secret "GOOGLE_CLIENT_SECRET"
             :authorize "https://accounts.google.com/o/oauth2/v2/auth"
             :token "https://oauth2.googleapis.com/token"
             :profile "https://openidconnect.googleapis.com/v1/userinfo"
             :scope "openid profile email"}
-   :github {:label "GitHub"
-            :client-id "GITHUB_CLIENT_ID" :client-secret "GITHUB_CLIENT_SECRET"
+   :github {:client-id "GITHUB_CLIENT_ID" :client-secret "GITHUB_CLIENT_SECRET"
             :authorize "https://github.com/login/oauth/authorize"
             :token "https://github.com/login/oauth/access_token"
             :profile "https://api.github.com/user"
             :scope "read:user"}
-   :microsoft {:label "Microsoft"
-               :client-id "MICROSOFT_CLIENT_ID" :client-secret "MICROSOFT_CLIENT_SECRET"
+   :microsoft {:client-id "MICROSOFT_CLIENT_ID" :client-secret "MICROSOFT_CLIENT_SECRET"
                :authorize "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
                :token "https://login.microsoftonline.com/common/oauth2/v2.0/token"
                :profile "https://graph.microsoft.com/oidc/userinfo"
                :scope "openid profile email"}
-   :apple {:label "Apple"
-           :client-id "APPLE_CLIENT_ID"
+   :apple {:client-id "APPLE_CLIENT_ID"
            :authorize "https://appleid.apple.com/auth/authorize"
            :token "https://appleid.apple.com/auth/token"
            :scope "name email"}})
@@ -47,12 +46,19 @@
        (and (env-value env (:client-id p))
             (env-value env (:client-secret p)))))))
 
-(defn method-status [env]
+(defn method-status
+  "Which routes this deployment is able to offer at all. Configuration only —
+  what a given account has attached is `itonami.auth.viewer/methods-view`.
+
+  Ordered by `config/sso-order` rather than by `providers`, whose order is a
+  map's and therefore not a contract."
+  [env]
   {"email" (boolean (env-value env "EMAIL_DELIVERY_TOKEN"))
-   "sso" (mapv (fn [[id p]]
-                  {"id" (name id) "name" (:label p)
-                   "configured" (boolean (configured? env id))})
-                providers)})
+   "sso" (mapv (fn [id]
+                 {"id" id
+                  "name" (get config/provider-labels id id)
+                  "configured" (boolean (configured? env (keyword id)))})
+               config/sso-order)})
 
 (defn- random-b64url [n]
   (let [bytes (js/crypto.getRandomValues (js/Uint8Array. n))]
@@ -106,7 +112,11 @@
                            :ttl_ms config/federated-state-ttl-ms
                            :value {:provider (name provider) :verifier verifier
                                    :nonce nonce :return-to return-to
-                                   :did (when (get session "valid")
+                                   ;; `key-rooted?`, not `valid`: a session
+                                   ;; that a route issued may sign in but may
+                                   ;; not attach another route. See
+                                   ;; `itonami.auth.viewer/key-rooted?`.
+                                   :did (when (viewer/key-rooted? session)
                                           (get session "accountDid"))}})))
           (.then
            (fn [stored]
@@ -227,9 +237,31 @@
   (-> (digest (str (name provider) ":" subject) :hex)
       (.then #(str "identity:" (name provider) ":" %))))
 
-(defn- finish-identity! [env provider subject did]
+(defn- profile-handle
+  "The human-readable handle this provider returned, if any.
+
+  Used ONLY to build a masked label (`viewer/mask-handle`) so the owner can
+  tell two routes of the same provider apart on the routes list. The unmasked
+  value is never stored: this surface has no reason to hold a second copy of
+  an address the enrolment plane already holds, and the label exists to be
+  recognised, not to be an identifier."
+  [provider profile]
+  (some-> (if (= provider :github) (aget profile "login") (aget profile "email"))
+          str not-empty))
+
+(defn- finish-identity!
+  "Resolve the subject, and link it when `did` is present.
+
+  `provider` and `label` are passed on every call, not only when linking: the
+  store uses them to heal a route that predates the reverse index, and a
+  sign-in through an old route is the one moment we reliably know what that
+  route is (`itonami.auth.durable/op-identity-complete`)."
+  [env provider subject did label]
   (-> (identity-key! provider subject)
-      (.then #(store/call! env "identity-complete" {:key % :did did}))))
+      (.then #(store/call! env "identity-complete"
+                           {:key % :did did
+                            :provider (name provider)
+                            :label label}))))
 
 (defn- issued! [env provider did linked? return-to]
   (-> (passkey/issue-session!
@@ -256,7 +288,9 @@
                      (.then
                       (fn [profile]
                         (if-let [sub (subject provider profile)]
-                          (finish-identity! env provider sub (get transaction "did"))
+                          (finish-identity!
+                           env provider sub (get transaction "did")
+                           (viewer/mask-handle (profile-handle provider profile)))
                           (js/Promise.reject (js/Error. "missing subject")))))
                      (.then
                       (fn [result]
@@ -281,8 +315,12 @@
       (js/Promise.resolve accepted)
       (-> (identity-key! :email email)
           (.then #(store/call! env "identity-complete"
-                              {:key % :did (when (get session "valid")
-                                             (get session "accountDid"))}))
+                              {:key % :provider "email"
+                               :label (viewer/mask-handle email)
+                               ;; See `start!`: only a key-rooted session may
+                               ;; attach a route.
+                               :did (when (viewer/key-rooted? session)
+                                      (get session "accountDid"))}))
           (.then
            (fn [identity]
              (if-not (aget identity "ok")
@@ -313,6 +351,60 @@
                      (.then (constantly accepted))))))))
           (.catch (constantly accepted))))))
 
+;; ── the routes attached to one key ──────────────────────────────────────────
+
+(defn methods!
+  "What the page needs to draw the key and everything hanging off it.
+
+  Falls back to configuration-only when the store cannot answer, rather than
+  failing the whole request: a sign-in page that will not render because a
+  routes list is unavailable has turned a management feature into an outage.
+  The person can still sign in with their passkey, which is the point of the
+  key being the root."
+  [env session]
+  (let [status (method-status env)
+        alone {:status 200 :body (viewer/methods-view {:status status})}]
+    (if-not (get session "valid")
+      (js/Promise.resolve alone)
+      (-> (store/call! env "identity-list" {:did (get session "accountDid")})
+          (.then (fn [res]
+                   (if-not (aget res "ok")
+                     alone
+                     {:status 200
+                      :body (viewer/methods-view
+                             {:status status
+                              :routes (js->clj (aget res "routes"))
+                              :manage? (viewer/key-rooted? session)})})))
+          (.catch (constantly alone))))))
+
+(defn unlink!
+  "Detach one route from this key.
+
+  Refuses a single-factor session in this Worker as well as in the store. Two
+  checks for one rule is deliberate: this one can say WHY, and a person who is
+  told `パスキーでサインインしてください` can act, where a bare `not_linked`
+  from the store reads as a bug."
+  [env session key]
+  (cond
+    (not (get session "valid"))
+    (js/Promise.resolve {:status 401 :body {"ok" false "error" "sign_in_required"}})
+
+    (not (viewer/key-rooted? session))
+    (js/Promise.resolve {:status 403 :body {"ok" false "error" "passkey_required"}})
+
+    (not (and (string? key) (str/starts-with? key "identity:")))
+    (js/Promise.resolve {:status 400 :body {"ok" false "error" "invalid_route"}})
+
+    :else
+    (-> (store/call! env "identity-unlink"
+                     {:key key :did (get session "accountDid")})
+        (.then (fn [res]
+                 (if (aget res "ok")
+                   {:status 200 :body {"ok" true}}
+                   {:status 404 :body {"ok" false "error" "not_linked"}})))
+        (.catch (constantly {:status 503
+                             :body {"ok" false "error" "temporarily_unavailable"}})))))
+
 (defn email-verify! [env token]
   (if (str/blank? token)
     (js/Promise.resolve {:status 303 :location "/?error=email_invalid"})
@@ -324,7 +416,8 @@
              {:status 303 :location "/?error=email_invalid"}
              (let [transaction (js->clj (aget consumed "value"))]
                (-> (finish-identity! env :email (get transaction "email")
-                                     (get transaction "did"))
+                                     (get transaction "did")
+                                     (viewer/mask-handle (get transaction "email")))
                    (.then (fn [identity]
                             (if-not (aget identity "ok")
                               {:status 303 :location "/?error=link_required"}
