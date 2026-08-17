@@ -465,6 +465,123 @@
                    (check "keeping the moment it was originally attached"
                           (= 1700000000000 (aget route "linkedAt")))))))))
 
+(defn- authorize-url
+  [{:keys [scope resource challenge state]}]
+  (str "https://auth.itonami.cloud/authorize"
+       "?client_id=cloud-itonami-app-native"
+       "&redirect_uri=" (js/encodeURIComponent
+                         "http://localhost:1338/api/auth/itonami/callback")
+       "&response_type=code"
+       "&scope=" (js/encodeURIComponent scope)
+       (if resource (str "&resource=" (js/encodeURIComponent resource)) "")
+       "&state=" state
+       "&code_challenge=" challenge
+       "&code_challenge_method=S256"))
+
+(defn- introspect!
+  "POST /oauth/introspect, with whatever credential the case wants to present."
+  [env token authorization]
+  (-> (fetch! env "https://auth.itonami.cloud/oauth/introspect"
+              {:method "POST"
+               :headers (cond-> {"content-type" "application/x-www-form-urlencoded"}
+                          authorization (assoc "authorization" authorization))
+               :body (str "token=" (js/encodeURIComponent token))})
+      (.then (fn [res] (.then (.json res) #(vector (.-status res) %))))))
+
+(defn- case-mcp-token-is-audience-bound-and-introspectable
+  "The whole hosted-MCP path, in one case: a person authorizes, a token comes
+  back bound to ONE resource, and the resource server — and nobody else — can
+  ask what it says.
+
+  The refusals matter as much as the issue. A `mcp:tools` request with no
+  `resource` must not produce a token, because a token for every resource is
+  what an audience exists to prevent; and introspection with no credential, or
+  the wrong one, must not answer even `active: false` truthfully — that answer
+  is itself an oracle."
+  []
+  (let [secret "resource-server-secret"
+        env (fake-env :bindings {"MCP_RESOURCE_CLIENT_ID" "itonami-mcp-resource"
+                                 "MCP_RESOURCE_CLIENT_SECRET" secret})
+        basic (str "Basic " (js/btoa (str "itonami-mcp-resource:" secret)))
+        resource "http://localhost:1338/mcp"
+        verifier (apply str (repeat 43 "m"))
+        state (apply str (repeat 32 "t"))
+        seen (atom {})]
+    (-> (js/Promise.all #js [(digest "mcp-cookie" :hex) (digest verifier :base64url)])
+        (.then
+         (fn [values]
+           (let [session-digest (aget values 0)]
+             (swap! seen assoc :challenge (aget values 1))
+             (store-call! env {:op "session-put"
+                               :key (str "session:" session-digest)
+                               :ttl_ms 60000 :now_ms (js/Date.now)
+                               :value {"accountDid" "did:key:z6MkMcp"
+                                       "activeDid" "did:key:z6MkMcp"
+                                       "acr" "phishing-resistant"
+                                       "authenticatedAt" 1700000000000}}))))
+        ;; The direction that must NOT work, first — so a later pass cannot be
+        ;; read as "audience binding is on" when it is only "nothing is checked".
+        (.then (fn [_]
+                 (fetch! env (authorize-url {:scope "mcp:tools"
+                                             :challenge (:challenge @seen)
+                                             :state state})
+                         {:headers {"cookie" "__Host-itonami_session=mcp-cookie"}})))
+        (.then (fn [res]
+                 (check "mcp:tools without a resource is refused"
+                        (= 400 (.-status res)))
+                 (fetch! env (authorize-url {:scope "identity:read mcp:tools"
+                                             :resource resource
+                                             :challenge (:challenge @seen)
+                                             :state state})
+                         {:headers {"cookie" "__Host-itonami_session=mcp-cookie"}})))
+        (.then (fn [res]
+                 (check "with one it authorizes" (= 303 (.-status res)))
+                 (let [callback (js/URL. (.get (.-headers res) "location"))]
+                   (fetch! env "https://auth.itonami.cloud/oauth/token"
+                           {:method "POST"
+                            :headers {"content-type" "application/x-www-form-urlencoded"}
+                            :body (str "grant_type=authorization_code"
+                                       "&client_id=cloud-itonami-app-native"
+                                       "&redirect_uri="
+                                       (js/encodeURIComponent
+                                        "http://localhost:1338/api/auth/itonami/callback")
+                                       "&code=" (js/encodeURIComponent
+                                                 (.get (.-searchParams callback) "code"))
+                                       "&code_verifier=" verifier)}))))
+        (.then (fn [res]
+                 (check "the code exchanges" (= 200 (.-status res)))
+                 (.json res)))
+        (.then (fn [body]
+                 (check "and the token carries both scopes"
+                        (= "identity:read mcp:tools" (aget body "scope")))
+                 (swap! seen assoc :access (aget body "access_token"))
+                 (introspect! env (:access @seen) nil)))
+        (.then (fn [[status _]]
+                 (check "introspection with no credential is 401" (= 401 status))
+                 (introspect! env (:access @seen)
+                              (str "Basic " (js/btoa "itonami-mcp-resource:wrong")))))
+        (.then (fn [[status _]]
+                 (check "and with the wrong secret is 401" (= 401 status))
+                 (introspect! env (:access @seen) basic)))
+        (.then (fn [[status body]]
+                 (check "the resource server gets 200" (= 200 status))
+                 (check "the token is active" (true? (aget body "active")))
+                 (check "bound to the one resource asked for"
+                        (= resource (aget body "aud")))
+                 (check "carrying the scopes" (= "identity:read mcp:tools"
+                                                 (aget body "scope")))
+                 (check "the subject cloud-itonami-app will look up"
+                        (= "did:key:z6MkMcp" (aget body "sub")))
+                 (check "the client, which that app requires"
+                        (= "cloud-itonami-app-native" (aget body "client_id")))
+                 (check "an expiry, so a stale token is refused before use"
+                        (number? (aget body "exp")))
+                 (check "and this issuer" (= "https://auth.itonami.cloud" (aget body "iss")))
+                 (introspect! env "a-token-nobody-issued" basic)))
+        (.then (fn [[status body]]
+                 (check "a token this issuer never minted is inactive, not an error"
+                        (and (= 200 status) (false? (aget body "active")))))))))
+
 ;; ── run ─────────────────────────────────────────────────────────────────────
 
 (defn- run []
@@ -480,6 +597,8 @@
       (.then #(run-case "health" case-health))
       (.then #(run-case "federated methods and linking" case-federated-methods-and-linking))
       (.then #(run-case "OAuth PKCE" case-oauth-pkce-is-single-use))
+      (.then #(run-case "MCP token: audience and introspection"
+                        case-mcp-token-is-audience-bound-and-introspectable))
       (.then #(run-case "routes are visible and removable" case-routes-are-manageable))
       (.then #(run-case "a legacy link heals its index" case-legacy-link-heals))
       (.then (fn [_]

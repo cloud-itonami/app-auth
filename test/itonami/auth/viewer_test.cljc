@@ -106,6 +106,69 @@
     (is (str/includes? uri ":1338/")
         "the port the client actually listens on")))
 
+(deftest a-scope-beyond-identity-needs-an-audience
+  (let [base {"client_id" (:client-id config/oauth-client)
+              "redirect_uri" (:redirect-uri config/oauth-client)
+              "response_type" "code"
+              "state" (apply str (repeat 32 "s"))
+              "code_challenge" (apply str (repeat 43 "a"))
+              "code_challenge_method" "S256"}
+        mcp (assoc base "scope" "mcp:tools")]
+    (testing "identity:read is answered by this issuer, so it needs no resource"
+      (is (some? (viewer/oauth-request (assoc base "scope" "identity:read")))))
+
+    (testing "mcp:tools names another server's work — without a resource, refused"
+      (is (nil? (viewer/oauth-request mcp))))
+
+    (testing "with the loopback resource server the desktop app actually serves"
+      (let [request (viewer/oauth-request
+                     (assoc mcp "resource" "http://localhost:1338/mcp"))]
+        (is (= "http://localhost:1338/mcp" (:resource request)))
+        (is (= "mcp:tools" (:scope request)))))
+
+    (testing "the scope string is sorted, so one request is one string"
+      (is (= "identity:read mcp:tools"
+             (:scope (viewer/oauth-request
+                      (assoc mcp "scope" "mcp:tools identity:read"
+                             "resource" "http://localhost:1338/mcp"))))))
+
+    (testing "a scope no client holds is refused, even though the resource knows it"
+      (is (contains? (set config/scopes-supported) "repository:write"))
+      (is (nil? (viewer/oauth-request
+                 (assoc mcp "scope" "repository:write"
+                        "resource" "http://localhost:1338/mcp")))))
+
+    (testing "an audience somewhere else is not this client's to ask for"
+      (doseq [bad ["https://evil.example/mcp"
+                   "http://192.168.1.10:1338/mcp"
+                   "http://localhost:1338/mcp#frag"
+                   "http://localhost:1338/mcp?x=1"
+                   "not-a-url"]]
+        (is (nil? (viewer/oauth-request (assoc mcp "resource" bad)))
+            (str bad " must not become an audience"))))))
+
+(deftest a-token-request-may-narrow-an-audience-but-not-move-it
+  (is (= "http://localhost:1338/mcp"
+         (viewer/token-request-resource "http://localhost:1338/mcp" nil))
+      "omitted repeats what was authorized")
+  (is (= "http://localhost:1338/mcp"
+         (viewer/token-request-resource "http://localhost:1338/mcp"
+                                        "http://localhost:1338/mcp")))
+  (is (= :mismatch
+         (viewer/token-request-resource "http://localhost:1338/mcp"
+                                        "https://elsewhere.example/mcp"))
+      "answering with the authorized audience would hand back a token that
+       cannot work, with no way to see why"))
+
+(deftest a-scope-parameter-is-a-set-or-it-is-nothing
+  (is (= #{"identity:read"} (viewer/requested-scopes "identity:read")))
+  (is (= #{"a" "b"} (viewer/requested-scopes "a  b")))
+  (is (= #{} (viewer/requested-scopes "")) "asking for nothing is an answer")
+  (is (nil? (viewer/requested-scopes nil)))
+  (testing "a token outside RFC 6749's scope-token alphabet reads as malformed"
+    (is (nil? (viewer/requested-scopes "identity:read \"quoted\"")))
+    (is (nil? (viewer/requested-scopes "back\\slash")))))
+
 (deftest credential-record-reads-only-what-a-login-needs
   (let [record {"pubKeyB64" "BASE64" "did" "did:key:z6Mk" "counter" 7
                 "backupEligible" true "backupState" false

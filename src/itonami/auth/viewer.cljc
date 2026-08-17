@@ -75,28 +75,109 @@
           raw
           fallback)))))
 
+(defn requested-scopes
+  "A `scope` parameter as the set it names, or nil if it is not one.
+
+  nil for a missing or malformed value rather than an empty set, because an
+  empty set is a real answer — `scope=` asking for nothing — and a caller that
+  cannot tell the two apart grants the default to a request that was garbage."
+  [raw]
+  (when (string? raw)
+    (let [tokens (remove str/blank? (str/split raw #"[ \t]+"))]
+      (when (every? #(re-matches #"[!#-\[\]-~]+" %) tokens)
+        (set tokens)))))
+
+(defn resource-indicator
+  "An RFC 8707 `resource` value this issuer will bind a token to, or nil.
+
+  The audience is stored and compared as the exact string the client asked
+  for, so it is normalized to nothing at all: a resource server checks that
+  the audience equals ITS resource URL, and a value this service had
+  rewritten would stop matching the one the resource publishes in its RFC
+  9728 document.
+
+  Rejected: a fragment (never part of a resource identifier), a query (the
+  same resource under two spellings, and a place to smuggle a second URL past
+  an eyeball), and any scheme but https — with loopback http admitted only for
+  a client whose `:loopback?` says its resource server IS the machine the
+  person is sitting at."
+  [client raw]
+  (when (string? raw)
+    (when-let [[_ scheme host path]
+               (re-matches #"(?i)(https?)://([A-Za-z0-9._~%!$&'()*+,;=:\[\]-]+)(/[^?#\s]*)?"
+                           raw)]
+      (let [scheme (str/lower-case scheme)
+            bare-host (str/lower-case (str/replace host #":\d+$" ""))
+            loopback? (contains? #{"localhost" "127.0.0.1" "[::1]"} bare-host)
+            url (str scheme "://" host (or path ""))]
+        (cond
+          (and (= "https" scheme) (contains? (:resources client) url)) url
+          ;; A loopback client's own resource server, on whichever port the
+          ;; operator started it with. https is never loopback in practice and
+          ;; http is never anything else here, so the two travel together.
+          (and (:loopback? client) (= "http" scheme) loopback?) url
+          :else nil)))))
+
 (defn oauth-request
-  "Validate the one public native client and its exact loopback redirect."
+  "Validate one authorization request against the client it names.
+
+  Three things this returns that the single-client version did not: the
+  granted scope set, the audience the token will carry, and the client record
+  itself — because with more than one registered client, what is allowed is a
+  property of the client and not of this service.
+
+  **A scope beyond `identity:read` requires a `resource`.** `identity:read` is
+  answered by this issuer's own `/userinfo`, so its audience is this issuer.
+  Every other scope names something a DIFFERENT server will do, and a token
+  for those without an audience is a bearer token good at every server that
+  trusts this one. The resource server refuses such a token anyway
+  (`oauth-resource/session` checks the audience before the scope); requiring
+  it here means the refusal happens before a person is asked to authorize
+  something that could not have worked."
   [params]
-  (let [{expected-client :client-id expected-redirect :redirect-uri
-         expected-scope :scope} config/oauth-client
-        client-id (get params "client_id")
+  (let [client-id (get params "client_id")
+        client (get config/oauth-clients client-id)
         redirect-uri (get params "redirect_uri")
         response-type (get params "response_type")
-        scope (get params "scope")
+        scopes (requested-scopes (get params "scope"))
         state (get params "state")
         challenge (get params "code_challenge")
-        method (get params "code_challenge_method")]
-    (when (and (= expected-client client-id)
-               (= expected-redirect redirect-uri)
+        method (get params "code_challenge_method")
+        resource (resource-indicator client (get params "resource"))
+        beyond-identity? (boolean (seq (disj (or scopes #{}) "identity:read")))]
+    (when (and client
+               (contains? (:redirect-uris client) redirect-uri)
                (= "code" response-type)
-               (= expected-scope scope)
+               (seq scopes)
+               (every? (:scopes client) scopes)
+               (or resource (not beyond-identity?))
                (= "S256" method)
                (string? state) (<= 32 (count state) 512)
                (string? challenge)
                (boolean (re-matches #"[A-Za-z0-9_-]{43,128}" challenge)))
-      {:client-id client-id :redirect-uri redirect-uri :scope scope
-       :state state :code-challenge challenge})))
+      (cond-> {:client-id client-id
+               :redirect-uri redirect-uri
+               ;; Sorted, so one request always produces one scope string —
+               ;; the value is echoed to the client and compared by tests.
+               :scope (str/join " " (sort scopes))
+               :state state
+               :code-challenge challenge}
+        resource (assoc :resource resource)))))
+
+(defn token-request-resource
+  "The audience a token request may be issued for, given what was authorized.
+
+  RFC 8707 §2.2 lets the token request repeat `resource`. It may narrow what
+  the code carries; it may not reach past it. `:mismatch` rather than nil for
+  a request that asks for a different audience, so the caller answers
+  `invalid_target` instead of quietly issuing the authorized one — an
+  audience the client did not expect is exactly the confusion the parameter
+  exists to prevent."
+  [authorized requested]
+  (cond
+    (or (nil? requested) (str/blank? requested)) authorized
+    (= requested authorized) authorized
+    :else :mismatch))
 
 ;; ── what a stored credential says ───────────────────────────────────────────
 
