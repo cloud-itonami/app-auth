@@ -17,8 +17,8 @@ replaced rather than ported: see ADR-2608110100.
 
 | | |
 |---|---|
-| **Does** | verify a WebAuthn assertion, attach/list/detach a verified Apple/Google/GitHub/Microsoft/Email route on that passkey DID, issue and revoke an opaque browser session, exchange a one-minute Authorization Code + PKCE for a five-minute native-app token |
-| **Does not** | enrol a passkey, mint or hold an itonami signing key, create or merge an identity from email equality |
+| **Does** | verify a WebAuthn assertion, attach/list/detach a verified Apple/Google/GitHub/Microsoft/Email route on that passkey DID, issue and revoke an opaque browser session, exchange a one-minute Authorization Code + PKCE for a five-minute native-app token, bind that token to one RFC 8707 resource and answer RFC 7662 introspection about it |
+| **Does not** | enrol a passkey, mint or hold an itonami signing key, create or merge an identity from email equality, ask a person to consent to a scope (so no client holds one that would need it), refresh a token, or register a client dynamically |
 
 Enrolment stays at `itonami.cloud/signin/`, which owns custody: registration
 there mints a server-custodied Ed25519 key wrapped under a KEK. **This Worker
@@ -75,6 +75,25 @@ the enrolment plane's account record tracks `:account/emails` but has no
 equivalent for upstream providers, so its `recovery-posture` does not count
 them. Both are noted rather than papered over.
 
+Four more, on the authorization side, each of which is a decision and not an
+oversight-in-progress:
+
+- **No consent screen.** The one registered client is first-party, so the
+  sign-in IS the authorization. That holds only while no client can request a
+  scope a person would want to refuse separately — which is why
+  `repository:write` is held by nobody.
+- **No refresh token.** An access token lives five minutes, and the client
+  gets another by asking a person again. A long-lived MCP session needs
+  refresh with rotation and reuse detection, which is more surface than this
+  service has justified so far.
+- **No dynamic client registration.** MCP's guidance prefers RFC 7591; open
+  registration decides who may ask a person for authority, and that wants an
+  ADR rather than an endpoint.
+- **`sub` is a `did:key`.** cloud-itonami-app looks its local user up by the
+  introspected `sub`, and its memberships are keyed by a local user id. Until
+  one of the two sides maps the other, an audience-correct, scope-correct
+  token is still refused there as an unknown subject. Measured, not assumed.
+
 Every provider uses a five-minute, single-use state and Authorization Code
 flow. Google, GitHub, and Microsoft use PKCE S256 in addition to their Worker
 secret. Apple uses `form_post`; its client-secret JWT is generated in the
@@ -104,6 +123,55 @@ EMAIL_DELIVERY_TOKEN
 ```
 
 Values are installed with `wrangler secret put <NAME>` and are never committed.
+
+## Tokens a resource server can check
+
+`identity:read` is answered here, by `/userinfo`. Every other scope names work
+a **different** server does, and the one that exists is cloud-itonami-app's
+hosted MCP (its ADR-0015): an OAuth 2.1 resource server that admits a token
+only if the audience is its own `/mcp` URL and the scope is the route's.
+
+So a request for anything beyond `identity:read` must carry an RFC 8707
+`resource`, and the token is bound to exactly that one:
+
+```text
+GET /authorize?client_id=cloud-itonami-app-native
+  &scope=identity%3Aread%20mcp%3Atools
+  &resource=http%3A%2F%2Flocalhost%3A1338%2Fmcp
+  &response_type=code&redirect_uri=…&state=…&code_challenge=…&code_challenge_method=S256
+```
+
+Without the `resource` the request is refused rather than granted broadly —
+a token with no audience is a bearer credential good at every server that
+trusts this issuer. The token request may repeat the value; a **different**
+one answers `invalid_target`.
+
+The resource server resolves that token through RFC 7662:
+
+```text
+POST /oauth/introspect        Authorization: Basic <id:secret>
+token=<access token>          → {"active":true,"aud":…,"scope":…,"sub":…,
+                                 "client_id":…,"exp":…,"iss":…}
+```
+
+Two Worker secrets, and introspection is 401 until **both** exist — an
+unconfigured credential refuses rather than matching an absent header:
+
+```text
+MCP_RESOURCE_CLIENT_ID       MCP_RESOURCE_CLIENT_SECRET
+```
+
+The same pair goes to the resource server as
+`CLOUD_ITONAMI_OAUTH_RESOURCE_CLIENT_ID` / `_SECRET`, with
+`[:mcp :oauth :introspection-endpoint]` pointing at the endpoint above. An
+unknown token is `{"active": false}`; an unknown **caller** is 401, because
+the first answer is itself an oracle about somebody else's token.
+
+`repository:read` and `repository:write` are advertised in
+`scopes_supported` because the resource understands them, and are held by no
+client. Writing to somebody's repository is the case that needs a consent
+screen this service does not have — a scope reachable without one would be
+granted by a sign-in performed for a different reason.
 
 ## Why it does not have its own Relying Party
 
