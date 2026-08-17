@@ -130,6 +130,61 @@
    :redirect-uri "http://localhost:1338/api/auth/itonami/callback"
    :scope "identity:read"})
 
+;; ── what a token may say, and for whom ──────────────────────────────────────
+
+(def scopes-supported
+  "Every scope this issuer will put in a token.
+
+  The first is this service's own: `identity:read` is what `/userinfo`
+  answers. The rest are read from the resource server that will be handed
+  these tokens — `cloud.itonami.app.oauth-resource/scopes` in
+  cloud-itonami-app — because a scope string is a contract between an issuer
+  and a resource, and inventing a fifth name here would mint tokens no
+  resource admits.
+
+  `repository:read` and `repository:write` are listed because the resource
+  understands them, NOT because a client may have them: no registered client
+  requests them yet. Writing to somebody's repository is the case that needs
+  the consent screen this service does not have, and a scope reachable without
+  one would be granted by the sign-in a person performed for a different
+  reason."
+  ["identity:read" "mcp:tools" "tenant:connect"
+   "repository:read" "repository:write"])
+
+(def oauth-clients
+  "Registered clients, by `client_id`.
+
+  An explicit map and not dynamic registration (RFC 7591). MCP's own guidance
+  prefers DCR, and this service will likely need it, but open registration
+  decides who may ask a person for authority — that is a decision with an ADR
+  attached, not a default acquired by writing an endpoint.
+
+  `:resources` is what a token from this client may be audience-bound to, in
+  the RFC 8707 sense. `:loopback?` admits any `http://localhost:<port>` or
+  `http://127.0.0.1:<port>` resource, which is what a desktop app's own
+  resource server is: cloud-itonami-app serves `/mcp` on the loopback origin
+  it was started with, and the port is the operator's choice. That is a
+  narrower door than it looks — an audience only means anything to a server
+  that already trusts this issuer, and every such server checks that the
+  audience is its own URL."
+  {"cloud-itonami-app-native"
+   {:redirect-uris #{"http://localhost:1338/api/auth/itonami/callback"}
+    :scopes #{"identity:read" "mcp:tools" "tenant:connect"}
+    :loopback? true
+    :resources #{}}})
+
+(def introspection-client-id-env
+  "The resource server's own client id, as a Worker secret name.
+
+  Introspection is not a public endpoint and must not become one: an
+  unauthenticated `POST /oauth/introspect` is an oracle that tells anybody
+  whether a token they hold is live, and for whom. The resource server
+  authenticates with HTTP Basic — the same two values cloud-itonami-app reads
+  from `CLOUD_ITONAMI_OAUTH_RESOURCE_CLIENT_ID` / `_SECRET`."
+  "MCP_RESOURCE_CLIENT_ID")
+
+(def introspection-secret-env "MCP_RESOURCE_CLIENT_SECRET")
+
 (def enrolment-url
   "Where someone without a passkey is sent.
 
@@ -150,6 +205,9 @@
 (def paths
   {:authorize     "/authorize"
    :token         "/oauth/token"
+   ;; RFC 7662. Called by a resource server, never by a browser, and never
+   ;; without HTTP Basic — see `introspection-client-id-env`.
+   :introspect    "/oauth/introspect"
    :userinfo      "/userinfo"
    :metadata      "/.well-known/oauth-authorization-server"
    :login-options "/v1/passkey/login/options"

@@ -227,6 +227,18 @@
                      (json {"error" "invalid_request"} 400)
                      (.then (oauth/exchange! env form) respond)))))
 
+      ;; RFC 7662, for the resource server holding the other half of a Basic
+      ;; credential. Never reached by a browser, so no Origin dance and no
+      ;; cookie: the caller is a server, and the only thing that admits it is
+      ;; the secret.
+      (and (= method "POST") (= path (p :introspect)))
+      (-> (read-form request)
+          (.then (fn [form]
+                   (if-not (map? form)
+                     (json {"error" "invalid_request"} 400)
+                     (.then (oauth/introspect! env (authorization-header request) form)
+                            respond)))))
+
       (and (= method "GET") (= path (p :userinfo)))
       (.then (oauth/userinfo! env (authorization-header request)) respond)
 
