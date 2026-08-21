@@ -194,8 +194,13 @@
   custody two implementations — and would require binding the KEK here, which
   is exactly the secret that lets a compromised service sign as any user.
   With no KEK binding this Worker cannot sign as anyone, by construction and
-  not by policy. Enrolment stays where custody already lives."
-  "https://itonami.cloud/signin/")
+  not by policy. Enrolment stays where custody already lives.
+
+  The /ja/ route: itonami.cloud is English-default multilingual (/ = en,
+  /ja/ = ja) and this page is Japanese, so the ceremony must not switch
+  language on the enrolment hop. In lockstep with cloud-itonami-app's
+  `:enrolment-url` (its identity.clj says so by name)."
+  "https://itonami.cloud/ja/signin/")
 
 ;; ── the wire ────────────────────────────────────────────────────────────────
 ;;
