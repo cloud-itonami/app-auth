@@ -264,9 +264,17 @@
                             :label label}))))
 
 (defn- issued! [env provider did linked? return-to]
-  (-> (passkey/issue-session!
-       env {:account-did did :active-did did :auth-method (name provider)
-            :acr "single-factor" :amr [(name provider)]})
+  (-> (store/principal! env did)
+      (.then
+       (fn [{:keys [principal-id account-did]}]
+         (passkey/issue-session!
+          env {:principal-id principal-id
+               :account-did account-did
+               ;; Email/OIDC is the proof used for this session, while this
+               ;; DID remains the compatibility actor coordinate. It is not
+               ;; promoted to the stable Principal.
+               :active-did did :auth-method (name provider)
+               :acr "single-factor" :amr [(name provider)]})))
       (.then (fn [{:keys [token]}]
                {:status 303 :location return-to :linked linked?
                 :set-cookie (viewer/set-cookie token (quot config/session-ttl-ms 1000))}))))

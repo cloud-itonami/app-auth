@@ -181,6 +181,20 @@
 
 ;; ── what a stored credential says ───────────────────────────────────────────
 
+(defn principal-id?
+  "A stable logical subject, independent of a blockchain account. Existing
+  accounts may use a DID; newly enrolled accounts use the Kotoba Principal
+  URN. Neither form grants authority by itself."
+  [x]
+  (and (string? x)
+       (= x (str/trim x))
+       (<= 1 (count x) 256)
+       (not (str/includes? x "\n"))
+       (or (and (str/starts-with? x "did:")
+                (< (count "did:") (count x)))
+           (and (str/starts-with? x "urn:kotoba:principal:")
+                (< (count "urn:kotoba:principal:") (count x))))))
+
 (defn credential-record
   "Read the JSON record `cloud-itonami.edge.webauthn` writes at
   `webauthn-credential:<id>` into the few fields a login needs.
@@ -236,10 +250,11 @@
   that does not. It is not an assurance level: nothing here has seen an
   attestation chain, and a field named `assurance` would be read as though
   something had."
-  [{:keys [account-did active-did credential-id backup-eligible? backed-up?
+  [{:keys [principal-id account-did active-did credential-id backup-eligible? backed-up?
            auth-method acr amr authenticated-at expires-at]}]
   {"valid" true
    "did" (or account-did active-did)
+   "principalId" (or principal-id account-did active-did)
    "accountDid" account-did
    "activeDid" active-did
    "credentialId" credential-id

@@ -206,12 +206,15 @@
     (is (= 9 (viewer/baseline-seed 0 9)))))
 
 (deftest viewer-payload-separates-account-from-credential
-  (let [v (viewer/viewer {:account-did "did:web:kotobase.net:tenant:u"
+  (let [principal "urn:kotoba:principal:018f4d6c-29bf-7f80-9a21-111111111111"
+        v (viewer/viewer {:principal-id principal
+                          :account-did "did:web:kotobase.net:tenant:u"
                           :active-did "did:key:z6Mk"
                           :credential-id "cred"
                           :backup-eligible? true :backed-up? true
                           :expires-at 123})]
     (is (true? (get v "valid")))
+    (is (= principal (get v "principalId")))
     (is (= "did:web:kotobase.net:tenant:u" (get v "accountDid")))
     (is (= "did:key:z6Mk" (get v "activeDid")))
     (is (true? (get v "backedUp")))
@@ -220,6 +223,14 @@
       ;; would be read as though something had.
       (is (not (contains? v "assurance")))))
   (is (= {"valid" false} viewer/anonymous)))
+
+(deftest principal-id-is-chain-neutral-and-bounded
+  (is (viewer/principal-id? "urn:kotoba:principal:alice"))
+  (is (viewer/principal-id? "did:web:example.com:tenant:u"))
+  (is (not (viewer/principal-id? "eip155:8453:0xabc"))
+      "a chain account is a link, never the logical subject")
+  (is (not (viewer/principal-id? "urn:kotoba:principal:")))
+  (is (not (viewer/principal-id? "urn:kotoba:principal:alice\n"))))
 
 (deftest route-is-mount-relative
   (is (= "/" (config/route "/")))

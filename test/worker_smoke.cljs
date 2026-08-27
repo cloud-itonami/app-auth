@@ -282,7 +282,8 @@
              (-> (store-call! env {:op "session-put"
                                    :key (str "session:" session-digest)
                                    :ttl_ms 60000 :now_ms (js/Date.now)
-                                   :value {"accountDid" "did:web:kotobase.net:person:1"
+                                   :value {"principalId" "urn:kotoba:principal:person-1"
+                                           "accountDid" "did:web:kotobase.net:person:1"
                                            "activeDid" "did:key:z6Mk1"}})
                  (.then
                   (fn [_]
@@ -324,7 +325,15 @@
                                                  {:headers {"authorization" (str "Bearer " access)}})
                                          (.then (fn [userinfo-res]
                                                   (check "access token resolves at userinfo"
-                                                         (= 200 (.-status userinfo-res)))))))))
+                                                         (= 200 (.-status userinfo-res)))
+                                                  (.json userinfo-res)))
+                                         (.then (fn [userinfo]
+                                                  (check "userinfo subject is the stable Principal"
+                                                         (= "urn:kotoba:principal:person-1"
+                                                            (aget userinfo "sub")))
+                                                  (check "the compatibility account DID stays separate"
+                                                         (= "did:web:kotobase.net:person:1"
+                                                            (aget userinfo "account_did")))))))))
                           (then! (fn [_] (exchange)))
                           (then! (fn [replay]
                                    (check "authorization code replay is refused"
@@ -515,7 +524,8 @@
              (store-call! env {:op "session-put"
                                :key (str "session:" session-digest)
                                :ttl_ms 60000 :now_ms (js/Date.now)
-                               :value {"accountDid" "did:key:z6MkMcp"
+                               :value {"principalId" "urn:kotoba:principal:mcp"
+                                       "accountDid" "did:key:z6MkMcp"
                                        "activeDid" "did:key:z6MkMcp"
                                        "acr" "phishing-resistant"
                                        "authenticatedAt" 1700000000000}}))))
@@ -571,7 +581,9 @@
                  (check "carrying the scopes" (= "identity:read mcp:tools"
                                                  (aget body "scope")))
                  (check "the subject cloud-itonami-app will look up"
-                        (= "did:key:z6MkMcp" (aget body "sub")))
+                        (= "urn:kotoba:principal:mcp" (aget body "sub")))
+                 (check "the compatibility account coordinate is still explicit"
+                        (= "did:key:z6MkMcp" (aget body "account_did")))
                  (check "the client, which that app requires"
                         (= "cloud-itonami-app-native" (aget body "client_id")))
                  (check "an expiry, so a stale token is refused before use"

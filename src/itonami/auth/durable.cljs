@@ -286,7 +286,7 @@
   sign-out-everywhere button must not have."
   [state {:keys [key value ttl-ms now-ms]}]
   (let [expires (+ now-ms ttl-ms)
-        did (aget value "accountDid")]
+        did (or (aget value "principalId") (aget value "accountDid"))]
     (-> (sput state key #js {:value value :expires_at expires})
         (.then (fn [_]
                  (if-not (string? did)
@@ -318,7 +318,9 @@
   [state {:keys [key]}]
   (-> (sget state key)
       (.then (fn [record]
-               (let [did (some-> record (aget "value") (aget "accountDid"))]
+               (let [value (some-> record (aget "value"))
+                     did (or (some-> value (aget "principalId"))
+                             (some-> value (aget "accountDid")))]
                  (.then (delete-session! state key did)
                         (fn [_] (json-response #js {:ok true} 200))))))))
 
