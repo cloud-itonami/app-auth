@@ -86,7 +86,7 @@
   it to verify offline and nothing to leak by decoding it. That is what makes
   `/v1/logout/all` possible: revocation is deleting a row, not waiting for an
   expiry a signature already promised."
-  [env {:keys [account-did active-did credential-id backup-eligible? backed-up?
+  [env {:keys [principal-id account-did active-did credential-id backup-eligible? backed-up?
                auth-method acr amr authenticated-at]}]
   (let [token (random-b64url 32)]
     (-> (sha256-hex token)
@@ -94,7 +94,8 @@
                  (store/call! env "session-put"
                               {:key (str "session:" digest)
                                :ttl_ms config/session-ttl-ms
-                               :value {"accountDid" account-did
+                               :value {"principalId" (or principal-id account-did)
+                                       "accountDid" account-did
                                        "activeDid" active-did
                                        "credentialId" credential-id
                                        "backupEligible" (boolean backup-eligible?)
@@ -195,20 +196,21 @@
                               :backed-up? (:backed-up? verified)}]
                    (store/touch-credential!
                     env credential-id (assoc flags :sign-count (:sign-count verified)))
-                   (-> (issue-session! env (merge flags
-                                                  {:account-did (:did record)
-                                                   :active-did (:did record)
-                                                   :credential-id credential-id}))
-                       (.then (fn [{:keys [token expires-at]}]
-                                {:status 200
-                                 :set-cookie (viewer/set-cookie
-                                              token (quot config/session-ttl-ms 1000))
-                                 :body (viewer/viewer
-                                        (merge flags
-                                               {:account-did (:did record)
-                                                :active-did (:did record)
-                                                :credential-id credential-id
-                                                :expires-at expires-at}))})))))))))))) 
+                   (-> (store/principal! env (:did record))
+                       (.then
+                        (fn [{:keys [principal-id account-did]}]
+                          (let [identity {:principal-id principal-id
+                                          :account-did account-did
+                                          :active-did (:did record)
+                                          :credential-id credential-id}]
+                            (-> (issue-session! env (merge flags identity))
+                                (.then (fn [{:keys [token expires-at]}]
+                                         {:status 200
+                                          :set-cookie (viewer/set-cookie
+                                                       token (quot config/session-ttl-ms 1000))
+                                          :body (viewer/viewer
+                                                 (merge flags identity
+                                                        {:expires-at expires-at}))}))))))))))))))))
 
 ;; ── session reads and revocation ────────────────────────────────────────────
 
@@ -223,7 +225,9 @@
                  (if-not (and (aget res "ok") (aget res "found"))
                    viewer/anonymous
                    (let [v (aget res "value")]
-                     (viewer/viewer {:account-did (aget v "accountDid")
+                     (viewer/viewer {:principal-id (or (aget v "principalId")
+                                                       (aget v "accountDid"))
+                                     :account-did (aget v "accountDid")
                                      :active-did (aget v "activeDid")
                                      :credential-id (aget v "credentialId")
                                      :backup-eligible? (aget v "backupEligible")
@@ -253,7 +257,9 @@
                        (store/call! env "session-revoke" {:key key})
                        (-> (store/call! env "session-get" {:key key})
                            (.then (fn [res]
-                                    (let [did (some-> (aget res "value") (aget "accountDid"))]
+                                    (let [value (aget res "value")
+                                          did (or (some-> value (aget "principalId"))
+                                                  (some-> value (aget "accountDid")))]
                                       (store/call! env "session-revoke-all" {:did did})))))))))
           (.then (constantly cleared))
           (.catch (constantly cleared)))

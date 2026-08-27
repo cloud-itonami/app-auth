@@ -11,10 +11,11 @@
   **The Durable Object** holds everything whose correctness needs
   read-your-writes — see `itonami.auth.durable`.
 
-  This namespace reads credential records and never writes one. Enrolment
-  belongs to the surface that owns custody (`config/enrolment-url`); the one
-  KV write here is the shared clone baseline, kept in step so the other
-  surface's check does not go stale while this one is in use.
+  This namespace reads credential and account records and never changes their
+  identity. Enrolment belongs to the surface that owns custody
+  (`config/enrolment-url`); the one KV write here is the shared clone baseline,
+  kept in step so the other surface's check does not go stale while this one
+  is in use.
 
   ClojureScript only."
   (:require [itonami.auth.viewer :as viewer]))
@@ -51,6 +52,49 @@
                (when raw
                  (try (viewer/credential-record (js->clj (js/JSON.parse raw)))
                       (catch :default _ nil)))))))
+
+(defn- parse-json [raw]
+  (when raw
+    (try (js/JSON.parse raw) (catch :default _ nil))))
+
+(defn principal!
+  "Resolve an acting credential DID to the account's stable Principal.
+
+  The enrolment plane stores `account-did:<controller DID>` -> tenant/address,
+  then the account record. A new account carries a random
+  `urn:kotoba:principal:*`; a legacy account deliberately keeps its original
+  account DID as the stable id. Missing/corrupt linkage falls back to the
+  acting DID, preserving old standalone credentials without inventing a new
+  identity on login."
+  [env active-did]
+  (let [kv (aget env "ITONAMI_DATA")
+        fallback {:principal-id active-did :account-did active-did}]
+    (-> (js-invoke kv "get" (str "account-did:" active-did))
+        (.then
+         (fn [raw-link]
+           (if-let [link (parse-json raw-link)]
+             (let [tenant (aget link "tenant")
+                   address (aget link "address")]
+               (if (and (string? tenant) (seq tenant)
+                        (string? address) (seq address))
+                 (js-invoke kv "get" (str "account:" tenant ":" address))
+                 nil))
+             nil)))
+        (.then
+         (fn [raw-account]
+           (if-let [account (parse-json raw-account)]
+             (let [account-did (or (aget account "account/did")
+                                   (aget account "did")
+                                   active-did)
+                   principal-id (or (aget account "account/principal-id")
+                                    (aget account "principal-id")
+                                    account-did)]
+               (if (and (viewer/principal-id? principal-id)
+                        (viewer/principal-id? account-did))
+                 {:principal-id principal-id :account-did account-did}
+                 fallback))
+             fallback)))
+        (.catch (constantly fallback)))))
 
 (defn touch-credential!
   "Write back the accepted signCount, and the backup flags this assertion

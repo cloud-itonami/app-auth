@@ -31,7 +31,9 @@
   (if-let [request (viewer/oauth-request params)]
     (let [code (random-b64url 32)
           value (merge request
-                       {:account-did (get session "accountDid")
+                       {:principal-id (or (get session "principalId")
+                                          (get session "accountDid"))
+                        :account-did (get session "accountDid")
                         :active-did (get session "activeDid")
                         :acr (get session "acr")
                         :amr (get session "amr")
@@ -62,7 +64,8 @@
             env "session-put"
             {:key (str "access:" token-digest)
              :ttl_ms config/access-token-ttl-ms
-             :value (cond-> {"accountDid" (:account-did value)
+             :value (cond-> {"principalId" (:principal-id value)
+                             "accountDid" (:account-did value)
                              "activeDid" (:active-did value)
                              "clientId" (:client-id value)
                              "scope" (:scope value)
@@ -142,7 +145,8 @@
                (let [v (aget res "value")]
                  {:status 200
                   :body {"iss" config/canonical-origin
-                         "sub" (aget v "accountDid")
+                         "sub" (or (aget v "principalId") (aget v "accountDid"))
+                         "account_did" (aget v "accountDid")
                          "active_did" (aget v "activeDid")
                          "client_id" (aget v "clientId")
                          "scope" (aget v "scope")
@@ -217,7 +221,9 @@
                      {:status 200
                       :body (cond-> {"active" true
                                      "iss" config/canonical-origin
-                                     "sub" (aget v "accountDid")
+                                     "sub" (or (aget v "principalId")
+                                               (aget v "accountDid"))
+                                     "account_did" (aget v "accountDid")
                                      "client_id" (aget v "clientId")
                                      "scope" (aget v "scope")
                                      "token_type" "Bearer"
