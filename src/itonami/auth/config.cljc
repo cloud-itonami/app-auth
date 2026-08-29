@@ -40,6 +40,15 @@
 (def canonical-origin "https://auth.itonami.cloud")
 (def legacy-origin "https://app.itonami.cloud")
 
+(def kotoba-controller-origin
+  "The canonical controller that proves the shared Stable Principal. This is
+  an exact origin rather than an environment option: accepting an operator
+  supplied issuer would make the handoff only as strong as deployment config."
+  "https://auth.kotoba.cloud")
+
+(def kotoba-controller-target "itonami")
+(def kotoba-controller-return-to "https://itonami.cloud/?identity=connected")
+
 (def allowed-origins
   "Origins a verified `clientDataJSON.origin` may carry."
   #{canonical-origin legacy-origin "https://itonami.cloud"})
@@ -217,6 +226,7 @@
    :metadata      "/.well-known/oauth-authorization-server"
    :login-options "/v1/passkey/login/options"
    :login-verify  "/v1/passkey/login/verify"
+   :kotoba-link-complete "/v1/kotoba-link/complete"
    :sso-start     "/v1/sso"
    :sso-callback  "/v1/sso/callback"
    :email-start   "/v1/email/start"
