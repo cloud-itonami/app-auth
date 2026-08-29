@@ -154,10 +154,26 @@
 
 (defn- case-anonymous-session []
   (let [env (fake-env)]
-    (-> (fetch! env "https://auth.itonami.cloud/v1/session")
-        (.then (fn [res] (.json res)))
+    (-> (fetch! env "https://auth.itonami.cloud/v1/session"
+                {:headers {"origin" "https://itonami.cloud"}})
+        (.then (fn [res]
+                 (check "the Itonami apex may read the public session projection"
+                        (and (= "https://itonami.cloud"
+                                (.get (.-headers res) "access-control-allow-origin"))
+                             (= "true"
+                                (.get (.-headers res) "access-control-allow-credentials"))))
+                 (.json res)))
         (.then (fn [body]
                  (check "no cookie reads as no session" (false? (aget body "valid"))))))))
+
+(defn- case-session-cors-is-exact []
+  (let [env (fake-env)]
+    (-> (fetch! env "https://auth.itonami.cloud/v1/session"
+                {:headers {"origin" "https://evil-itonami.cloud"}})
+        (.then
+         (fn [res]
+           (check "a lookalike origin gets no credentialed CORS authority"
+                  (nil? (.get (.-headers res) "access-control-allow-origin"))))))))
 
 (defn- case-challenge-is-single-use []
   (let [env (fake-env)
@@ -230,6 +246,77 @@
         (.then (fn [body]
                  (check "health names the RP it is serving"
                         (= "itonami.cloud" (aget body "rpId"))))))))
+
+(defn- case-kotoba-controller-link []
+  (let [env (fake-env)
+        original-fetch (aget js/globalThis "fetch")
+        calls (atom [])]
+    (aset js/globalThis "fetch"
+          (fn [url options]
+            (swap! calls conj {:url url
+                               :method (aget options "method")
+                               :body (js->clj
+                                      (js/JSON.parse (aget options "body")))})
+            (js/Promise.resolve
+             (js/Response.
+              (js/JSON.stringify
+               #js {:identity #js {:valid true
+                                    :principalId "urn:kotoba:principal:itonami-e2e"
+                                    :accountDid "did:web:kotobase.net:person:itonami-e2e"
+                                    :activeDid "did:key:z6MkItonamiE2E"
+                                    :handle "kotoba-e2e"}
+                    :returnTo "https://itonami.cloud/?identity=connected"})
+              #js {:status 200
+                   :headers #js {"content-type" "application/json"}}))))
+    (-> (fetch! env "https://auth.itonami.cloud/v1/kotoba-link/complete"
+                {:method "POST"
+                 :headers {"content-type" "application/x-www-form-urlencoded"
+                           "origin" "https://evil.example"}
+                 :body "code=controller-code-with-enough-entropy-1234567890"})
+        (.then
+         (fn [res]
+           (check "a foreign origin cannot inject an Itonami controller login"
+                  (= 403 (.-status res)))
+           (check "the refused browser request does not redeem its code"
+                  (empty? @calls))))
+        (.then
+         (fn [_]
+           (fetch! env "https://auth.itonami.cloud/v1/kotoba-link/complete"
+                {:method "POST"
+                 :headers {"content-type" "application/x-www-form-urlencoded"
+                           "origin" "https://auth.kotoba.cloud"}
+                 :body "code=controller-code-with-enough-entropy-1234567890"})))
+        (.then
+         (fn [res]
+           (check "Kotoba controller handoff redirects to the fixed Itonami return"
+                  (and (= 303 (.-status res))
+                       (= "https://itonami.cloud/?identity=connected"
+                          (.get (.-headers res) "location"))))
+           (check "the target RP issues only its own host-only session"
+                  (let [cookie (or (.get (.-headers res) "set-cookie") "")]
+                    (and (str/includes? cookie "__Host-itonami_session=")
+                         (str/includes? cookie "HttpOnly")
+                         (not (str/includes? cookie "Domain=")))))
+           (check "redemption goes only to the fixed controller and target"
+                  (let [{:keys [url method body]} (first @calls)]
+                    (and (= "https://auth.kotoba.cloud/v1/controller-link/redeem" url)
+                         (= "POST" method)
+                         (= "itonami" (get body "target")))))
+           (.get (.-headers res) "set-cookie")))
+        (.then
+         (fn [cookie]
+           (fetch! env "https://auth.itonami.cloud/v1/session"
+                   {:headers {"cookie" (first (str/split cookie #";"))}})))
+        (.then (fn [res] (.json res)))
+        (.then
+         (fn [body]
+           (check "the Itonami session preserves the Stable Principal"
+                  (= "urn:kotoba:principal:itonami-e2e"
+                     (aget body "principalId")))
+           (check "and records the Passkey controller proof"
+                  (and (= "kotoba-passkey-link" (aget body "authMethod"))
+                       (= "phishing-resistant" (aget body "acr"))))))
+        (.finally (fn [] (aset js/globalThis "fetch" original-fetch))))))
 
 (defn- case-federated-methods-and-linking []
   (let [env (fake-env :bindings {"EMAIL_DELIVERY_TOKEN" "delivery"
@@ -602,11 +689,13 @@
       (.then #(run-case "return_to containment" case-return-to))
       (.then #(run-case "script" case-script))
       (.then #(run-case "anonymous session" case-anonymous-session))
+      (.then #(run-case "session CORS boundary" case-session-cors-is-exact))
       (.then #(run-case "challenge single-use" case-challenge-is-single-use))
       (.then #(run-case "origin allowlist" case-origin-is-checked))
       (.then #(run-case "logout" case-logout-always-clears))
       (.then #(run-case "routing" case-not-found))
       (.then #(run-case "health" case-health))
+      (.then #(run-case "Kotoba controller link" case-kotoba-controller-link))
       (.then #(run-case "federated methods and linking" case-federated-methods-and-linking))
       (.then #(run-case "OAuth PKCE" case-oauth-pkce-is-single-use))
       (.then #(run-case "MCP token: audience and introspection"

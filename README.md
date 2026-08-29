@@ -26,6 +26,20 @@ has no KEK binding, so it cannot sign as any user — by construction, not by
 policy.** A second enrolment path would have required that secret here and
 given the same custody two implementations.
 
+Kotoba identity continuity is a separate entrance, not a second Itonami
+enrolment implementation. `POST /v1/kotoba-link/complete` accepts only a
+high-entropy controller code created by `auth.kotoba.cloud` for target
+`itonami`. This Worker redeems it server-to-server at the fixed controller,
+validates the Stable Principal plus account/active DIDs and fixed return URL,
+then issues its own host-only `__Host-itonami_session`. The code is single-use;
+the browser never receives an identity assertion, cookie, Passkey material or
+long-lived bearer token from the controller.
+
+`GET /v1/session` exposes only the public viewer projection to the exact
+`https://itonami.cloud` origin with credentialed CORS. The host-only cookie
+does not move to the apex; the apex can only render whether its own Itonami
+session is connected.
+
 ## The key is the root; Email and SSO are routes attached to it
 
 A passkey — held in a credential manager, which is where
@@ -89,10 +103,11 @@ oversight-in-progress:
 - **No dynamic client registration.** MCP's guidance prefers RFC 7591; open
   registration decides who may ask a person for authority, and that wants an
   ADR rather than an endpoint.
-- **`sub` is a `did:key`.** cloud-itonami-app looks its local user up by the
-  introspected `sub`, and its memberships are keyed by a local user id. Until
-  one of the two sides maps the other, an audience-correct, scope-correct
-  token is still refused there as an unknown subject. Measured, not assumed.
+- **`sub` is the Stable Principal.** New Kotoba-linked sessions use a
+  `urn:kotoba:principal:*`; legacy Itonami sessions may still use a DID.
+  cloud-itonami-app must map that subject to its local membership before an
+  audience-correct, scope-correct token can act. Identity continuity does not
+  invent membership. Measured, not assumed.
 
 Every provider uses a five-minute, single-use state and Authorization Code
 flow. Google, GitHub, and Microsoft use PKCE S256 in addition to their Worker

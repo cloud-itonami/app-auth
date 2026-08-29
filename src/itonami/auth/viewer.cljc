@@ -195,6 +195,12 @@
            (and (str/starts-with? x "urn:kotoba:principal:")
                 (< (count "urn:kotoba:principal:") (count x))))))
 
+(defn did?
+  "A bounded DID coordinate. Stable Principal URNs are deliberately excluded
+  where the wire promises accountDid or activeDid."
+  [x]
+  (and (principal-id? x) (str/starts-with? x "did:")))
+
 (defn credential-record
   "Read the JSON record `cloud-itonami.edge.webauthn` writes at
   `webauthn-credential:<id>` into the few fields a login needs.

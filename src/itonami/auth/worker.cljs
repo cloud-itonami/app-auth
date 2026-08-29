@@ -120,6 +120,91 @@
 (defn- respond [{:keys [status body set-cookie]}]
   (json body status set-cookie))
 
+(defn- session-json
+  "Expose the public viewer to the Itonami apex and to no other web origin.
+
+  The cookie remains host-only at auth.itonami.cloud. A credentialed GET from
+  the first-party apex is the projection bridge; this does not share or move
+  the cookie itself."
+  [request body]
+  (let [response (json body 200)
+        origin (js-invoke (aget request "headers") "get" "origin")]
+    (when (= "https://itonami.cloud" origin)
+      (doto (aget response "headers")
+        (.set "access-control-allow-origin" "https://itonami.cloud")
+        (.set "access-control-allow-credentials" "true")
+        (.set "vary" "Origin")))
+    response))
+
+(defn- redeem-kotoba-controller-link!
+  "Redeem a target-bound, single-use controller code over the server channel.
+
+  The browser only carries the opaque code. The identity projection comes
+  directly from the fixed Kotoba controller origin and is checked again here
+  before this RP issues its own host-only session."
+  [code]
+  (-> (js/fetch (str config/kotoba-controller-origin
+                     "/v1/controller-link/redeem")
+                #js {:method "POST"
+                     :headers #js {"accept" "application/json"
+                                   "content-type" "application/json"}
+                     :body (js/JSON.stringify
+                            #js {:code code
+                                 :target config/kotoba-controller-target})})
+      (.then (fn [response]
+               (if (= 200 (aget response "status"))
+                 (js-invoke response "json")
+                 (js/Promise.reject (js/Error. "controller link refused")))))))
+
+(defn- controller-identity
+  [payload]
+  (let [identity (js->clj (aget payload "identity"))
+        return-to (aget payload "returnTo")
+        principal-id (get identity "principalId")
+        account-did (get identity "accountDid")
+        active-did (get identity "activeDid")]
+    (when (and (= true (get identity "valid"))
+               (viewer/principal-id? principal-id)
+               (viewer/did? account-did)
+               (viewer/did? active-did)
+               (= config/kotoba-controller-return-to return-to))
+      {:principal-id principal-id
+       :account-did account-did
+       :active-did active-did})))
+
+(defn- issue-controller-session!
+  [env identity]
+  (-> (passkey/issue-session!
+       env (merge identity
+                  {:auth-method "kotoba-passkey-link"
+                   :acr config/key-rooted-acr
+                   :amr ["webauthn" "kotoba-controller-link"]}))
+      (.then
+       (fn [{:keys [token]}]
+         (redirect-response
+          config/kotoba-controller-return-to
+          (viewer/set-cookie token (quot config/session-ttl-ms 1000)))))))
+
+(defn- complete-kotoba-controller-link!
+  [request env]
+  (let [origin (js-invoke (aget request "headers") "get" "origin")]
+    (if-not (= config/kotoba-controller-origin origin)
+      (js/Promise.resolve
+       (json {"ok" false "error" "controller link origin refused"} 403))
+      (-> (read-form request)
+          (.then
+           (fn [form]
+             (let [code (get form "code")]
+               (if-not (and (string? code) (<= 32 (count code) 256))
+                 (json {"ok" false "error" "invalid controller link"} 400)
+                 (-> (redeem-kotoba-controller-link! code)
+                     (.then
+                      (fn [payload]
+                        (if-let [identity (controller-identity payload)]
+                          (issue-controller-session! env identity)
+                          (json {"ok" false "error" "invalid controller identity"}
+                                502)))))))))))))
+
 (defn- handle [request env]
   (let [url (js/URL. (aget request "url"))
         host (aget url "host")
@@ -252,9 +337,12 @@
                  (json {"ok" false "error" "malformed request"} 400)
                  (.then (passkey/login-verify! env request body) respond))))
 
+      (and (= method "POST") (= path (p :kotoba-link-complete)))
+      (complete-kotoba-controller-link! request env)
+
       (and (= method "GET") (= path (p :session)))
       (.then (passkey/resolve-session! env (cookie-header request))
-             (fn [v] (json v 200)))
+             (fn [v] (session-json request v)))
 
       (and (= method "POST") (= path (p :logout)))
       (.then (passkey/logout! env (cookie-header request) false) respond)

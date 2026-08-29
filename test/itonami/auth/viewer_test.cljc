@@ -244,6 +244,9 @@
 (deftest endpoints-are-built-from-one-mount
   (is (= "/v1/session" (config/endpoint :session)))
   (is (= "/v1/passkey/login/verify" (config/endpoint :login-verify)))
+  (is (= "/v1/kotoba-link/complete" (config/endpoint :kotoba-link-complete)))
+  (is (viewer/did? "did:key:z6MkController"))
+  (is (not (viewer/did? "urn:kotoba:principal:person")))
   (testing "every declared path round-trips through route"
     (doseq [[k p] config/paths]
       (is (= p (config/route (config/endpoint k))) (str k)))))
