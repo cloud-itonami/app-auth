@@ -258,6 +258,18 @@
                     :headers {"content-type" "application/json"}
                     :body "{\"email\":\"person@example.com\"}"}]
                   ["Email verify" "https://auth.itonami.cloud/v1/email/verify?token=x" {}]
+                  ["SMS start" "https://auth.itonami.cloud/v1/sms/start"
+                   {:method "POST"
+                    :headers {"content-type" "application/json"}
+                    :body "{\"phone\":\"+15555550100\"}"}]
+                  ["password login" "https://auth.itonami.cloud/v1/password/login"
+                   {:method "POST"
+                    :headers {"content-type" "application/json"}
+                    :body "{\"password\":\"legacy-secret\"}"}]
+                  ["operator recovery" "https://auth.itonami.cloud/v1/recovery/operator-override"
+                   {:method "POST"
+                    :headers {"content-type" "application/json"}
+                    :body "{\"principal\":\"urn:kotoba:principal:person\"}"}]
                   ["method inventory" "https://auth.itonami.cloud/v1/methods" {}]
                   ["method unlink" "https://auth.itonami.cloud/v1/methods/unlink"
                    {:method "POST"
