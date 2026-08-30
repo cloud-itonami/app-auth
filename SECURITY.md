@@ -24,6 +24,33 @@ issued for another.
 Out of scope: the relying applications behind this Worker, each of which has
 its own repository and its own policy.
 
+## Workspace human-authentication boundary (ADR-2608302125)
+
+This project is a declared first-party human-authentication authority. The
+workspace root `SECURITY.md` and ADR-2608302125 are mandatory and this file may
+not weaken them.
+
+- The only active human-authentication method is a WebAuthn Passkey with exact
+  RP ID and Origin binding, server-issued single-use challenge, replay
+  protection, and user verification.
+- Email, password, SMS/voice, OAuth/OIDC/SAML/social/enterprise SSO, support
+  decisions, operator resets, and administrator overrides must not
+  authenticate, bootstrap, step up, register or replace a credential, recover
+  an account, or mint/upgrade a human session.
+- If Passkey authentication is unavailable, fail closed. Provider secrets,
+  legacy records, flags, or tenant settings must not enable a fallback.
+- Recovery replaces a credential and never directly creates a session. It
+  requires a one-time offline recovery secret, verifier-only storage, at least
+  48 hours of server-enforced delay, and a fresh Passkey. Operators may freeze
+  an account but cannot bypass the delay or grant identity.
+- Closed legacy routes return 404 or 410 without ceremony, redirect, token,
+  session, or credential issuance. Source, built Worker, and live-route
+  negative tests must include plausible legacy configuration.
+
+The current conformant claim is limited to the built Worker negative tests and
+the deployed `auth.itonami.cloud` route probes recorded by the workspace. It
+does not make other Itonami surfaces conformant.
+
 ## What is not claimed
 
 This repository carries **no third-party security certification**. There is no
