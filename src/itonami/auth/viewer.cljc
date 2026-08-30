@@ -215,7 +215,8 @@
   verifier as `nil` bytes."
   [m]
   (let [pub (get m "pubKeyB64")]
-    (when (and (map? m) (string? pub) (seq pub))
+    (when (and (map? m) (string? pub) (seq pub)
+               (nil? (get m "revokedAt")))
       {:public-key-b64 pub
        :did (get m "did")
        ;; The registration ceremony's own signCount — an authenticator may

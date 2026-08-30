@@ -57,6 +57,28 @@
   (when raw
     (try (js/JSON.parse raw) (catch :default _ nil))))
 
+(defn- account-credential-active?
+  "Does this account still authorize the presented credential?
+
+  Recovery writes revocation into the account before deleting the older
+  WebAuthn KV rows. Reading this authoritative state closes the failure window
+  where a best-effort cleanup could leave an old credential record usable."
+  [account account-did active-did credential-id]
+  (let [raw (or (aget account "account/credentials")
+                (aget account "credentials"))
+        credentials (if (array? raw) (array-seq raw) [])]
+    (if (seq credentials)
+      (boolean
+       (some (fn [c]
+               (and (= credential-id (or (aget c "credential/id") (aget c "id")))
+                    (= active-did (or (aget c "credential/did") (aget c "did")))
+                    (nil? (or (aget c "credential/revoked-at")
+                              (aget c "revoked-at")))))
+             credentials))
+      ;; Before the credential collection existed, the account DID itself was
+      ;; the one controller. Preserve that explicit legacy shape only.
+      (= active-did account-did))))
+
 (defn principal!
   "Resolve an acting credential DID to the account's stable Principal.
 
@@ -66,35 +88,101 @@
   account DID as the stable id. Missing/corrupt linkage falls back to the
   acting DID, preserving old standalone credentials without inventing a new
   identity on login."
-  [env active-did]
+  ([env active-did] (principal! env active-did nil))
+  ([env active-did credential-id]
   (let [kv (aget env "ITONAMI_DATA")
-        fallback {:principal-id active-did :account-did active-did}]
+        fallback {:principal-id active-did :account-did active-did
+                  :credential-active? true}
+        unavailable {:principal-id active-did :account-did active-did
+                     :credential-active? false}]
     (-> (js-invoke kv "get" (str "account-did:" active-did))
         (.then
          (fn [raw-link]
-           (if-let [link (parse-json raw-link)]
-             (let [tenant (aget link "tenant")
-                   address (aget link "address")]
-               (if (and (string? tenant) (seq tenant)
-                        (string? address) (seq address))
-                 (js-invoke kv "get" (str "account:" tenant ":" address))
-                 nil))
-             nil)))
+           (if-not raw-link
+             {:standalone? true}
+             (if-let [link (parse-json raw-link)]
+               (let [tenant (aget link "tenant")
+                     address (aget link "address")]
+                 (if (and (string? tenant) (seq tenant)
+                          (string? address) (seq address))
+                   (-> (js-invoke kv "get" (str "account:" tenant ":" address))
+                       (.then (fn [raw-account]
+                                {:raw-account raw-account
+                                 :tenant tenant
+                                 :address address})))
+                   {:invalid? true}))
+               {:invalid? true}))))
         (.then
-         (fn [raw-account]
-           (if-let [account (parse-json raw-account)]
-             (let [account-did (or (aget account "account/did")
-                                   (aget account "did")
-                                   active-did)
-                   principal-id (or (aget account "account/principal-id")
-                                    (aget account "principal-id")
-                                    account-did)]
-               (if (and (viewer/principal-id? principal-id)
-                        (viewer/principal-id? account-did))
-                 {:principal-id principal-id :account-did account-did}
-                 fallback))
-             fallback)))
-        (.catch (constantly fallback)))))
+         (fn [{:keys [raw-account tenant address standalone? invalid?]}]
+           (cond
+             standalone? fallback
+             invalid? unavailable
+             :else
+             (if-let [account (parse-json raw-account)]
+               (let [account-did (or (aget account "account/did")
+                                     (aget account "did")
+                                     active-did)
+                     principal-id (or (aget account "account/principal-id")
+                                      (aget account "principal-id")
+                                      account-did)]
+                 (if (and (viewer/principal-id? principal-id)
+                          (viewer/principal-id? account-did))
+                   {:principal-id principal-id :account-did account-did
+                    :tenant tenant :address address
+                    :credential-active?
+                    (if credential-id
+                      (account-credential-active?
+                       account account-did active-did credential-id)
+                      true)}
+                   unavailable))
+               unavailable))))
+        ;; A linked credential whose account cannot be checked must not fall
+        ;; back into a fresh standalone identity. Fail closed.
+        (.catch (constantly unavailable))))))
+
+(defn issue-recovery-enrollment!
+  "Write the short-lived ticket the KEK-owning enrolment surface consumes.
+
+  This Worker still cannot create a credential or sign as the account: the
+  value authorizes exactly one registration at the existing custody surface.
+  The recovery request digest binds the later account write back to the
+  delayed request that authorized it."
+  [env token {:keys [tenant address principal-id account-did request-digest exp]}]
+  (js-invoke (aget env "ITONAMI_DATA") "put" (str "enroll:" token)
+             (js/JSON.stringify
+              #js {:tenant tenant
+                   :address address
+                   :principalId principal-id
+                   :accountDid account-did
+                   :recoveryRequestDigest request-digest
+                   :kind "recovery"
+                   :exp exp})
+             #js {:expirationTtl 900}))
+
+(defn delete-recovery-enrollment! [env token]
+  (js-invoke (aget env "ITONAMI_DATA") "delete" (str "enroll:" token)))
+
+(defn recovery-enrolment-finished!
+  "Did the custody surface commit the replacement passkey for this request?"
+  [env {:keys [tenant address principal-id request-digest started-at]}]
+  (-> (js-invoke (aget env "ITONAMI_DATA") "get"
+                 (str "account:" tenant ":" (.toLowerCase address)))
+      (.then
+       (fn [raw]
+         (when-let [account (parse-json raw)]
+           (let [stored-principal (or (aget account "account/principal-id")
+                                      (aget account "principal-id")
+                                      (aget account "account/did")
+                                      (aget account "did"))
+                 recovered-at (or (aget account "account/recovered-at")
+                                  (aget account "recovered-at"))
+                 stored-request (or (aget account "account/recovery-request-digest")
+                                    (aget account "recovery-request-digest"))]
+             (boolean (and (= principal-id stored-principal)
+                           (= request-digest stored-request)
+                           (number? recovered-at)
+                           (<= started-at recovered-at)))))))
+      (.catch (constantly false))))
 
 (defn touch-credential!
   "Write back the accepted signCount, and the backup flags this assertion

@@ -14,7 +14,7 @@
   That is the same split net-kotobase/authn uses, and it is why a page that
   renders identically on every request costs the isolate nothing.
 
-  ## One document, three views
+  ## One document, four views
 
   ADR-2608080100: kotoba-lang UI is single-page. All three views are rendered
   here, inert, and `itonami.auth.app` flips `data-active` — moving between
@@ -75,6 +75,11 @@
        ".auth-did{font-family:var(--hig-font-mono);overflow-wrap:anywhere;}\n"
        ".auth-actions{display:flex;gap:var(--hig-spacing-3);flex-wrap:wrap;"
        "align-items:center;margin-top:var(--hig-spacing-4);}\n"
+       ".auth-field{display:grid;gap:var(--hig-spacing-2);margin-top:var(--hig-spacing-4);}\n"
+       ".auth-input{min-height:var(--hig-control-height-lg);padding:var(--hig-spacing-2);"
+       "border:1px solid var(--hig-color-separator);border-radius:var(--hig-radius-medium);}\n"
+       ".auth-keys{white-space:pre-wrap;overflow-wrap:anywhere;padding:var(--hig-spacing-3);"
+       "background:var(--hig-color-secondary-background);border-radius:var(--hig-radius-medium);}\n"
        ))
 
 (def return-to-slot
@@ -96,7 +101,9 @@
    [:div {:class "auth-actions"}
     (dds/button "パスキーでサインイン"
                 {:type :solid-fill :size "lg" :attrs {:data-act "passkey"}})
-    (dds/button "パスキーを作る" {:type :text :href config/enrolment-url})]
+    (dds/button "パスキーを作る" {:type :text :href config/enrolment-url})
+    (dds/button "復旧キーを使う"
+                {:type :text :attrs {:data-act "recovery-open"}})]
    ;; The managers are named here, not left to the browser's own wording. A
    ;; passkey is only as recoverable as the vault holding it, and "パスキーを
    ;; 作る" tells someone nothing about where it lands — which is how a
@@ -116,12 +123,47 @@
    [:p {:id "auth-backup" :class "auth-mut"}]
    [:div {:class "auth-actions"}
     ;; This Worker holds no KEK and so cannot enrol (`config/enrolment-url`).
-    ;; Recovery is another passkey; this Worker cannot offer a weaker fallback.
+    ;; A recovery key can only unlock delayed replacement enrolment there; it
+    ;; never becomes a normal login session or another signing-key custodian.
     (dds/button "予備のパスキーを作る"
                 {:type :outline :href config/enrolment-url})
+    (dds/button "復旧キーを作り直す"
+                {:type :outline :attrs {:data-act "recovery-keys-replace"}})
+    (dds/button "復旧申請を取り消す"
+                {:type :text :attrs {:data-act "recovery-cancel"}})
     (dds/button "サインアウト" {:type :text :attrs {:data-act "logout"}})
     (dds/button "すべての端末からサインアウト"
-                {:type :text :attrs {:data-act "logout-all"}})]))
+                {:type :text :attrs {:data-act "logout-all"}})]
+   [:section {:id "auth-recovery-keys" :hidden true}
+    (dds/heading 2 "使い捨て復旧キー")
+    [:p {:class "auth-mut"}
+     "各キーは1回だけ使えます。ここを閉じると再表示できません。パスキーマネージャーとは別の安全な場所へ保存してください。"]
+    [:pre {:id "auth-recovery-key-list" :class "auth-keys"}]
+    [:div {:class "auth-actions"}
+     (dds/button "すべてコピー"
+                 {:type :outline :attrs {:data-act "recovery-keys-copy"}})]]))
+
+(defn- recovery-view []
+  (view
+   "recovery"
+   (dds/heading 1 "アカウントを復旧")
+   [:p {:class "auth-mut"}
+    "使い捨て復旧キーを確認したあと、48時間の待機を開始します。Email・SMS・SSOによる本人確認は行いません。"]
+   [:div {:class "auth-field"}
+    [:label {:for "auth-recovery-key"} "復旧キー"]
+    [:input {:id "auth-recovery-key" :class "auth-input" :type "text"
+             :autocomplete "off" :autocapitalize "characters"
+             :spellcheck "false" :placeholder "ITONAMI-XXXX-…"}]]
+   [:p {:id "auth-recovery-wait" :class "auth-mut"}]
+   [:div {:class "auth-actions"}
+    (dds/button "48時間の待機を開始"
+                {:type :solid-fill :attrs {:data-act "recovery-start"}})
+    (dds/button "状態を確認"
+                {:type :outline :attrs {:data-act "recovery-status"}})
+    (dds/button "新しいパスキーを登録"
+                {:type :outline :attrs {:data-act "recovery-complete" :disabled true}})
+    (dds/button "サインインへ戻る"
+                {:type :text :attrs {:data-act "recovery-back"}})]))
 
 (defn- unsupported-view []
   (view
@@ -152,5 +194,6 @@
     (dds/container
      (sign-in-view)
      (signed-in-view)
+     (recovery-view)
      (unsupported-view)
      [:p {:id "auth-status" :class "auth-status" :role "status" :aria-live "polite"}])]))

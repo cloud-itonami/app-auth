@@ -17,6 +17,7 @@
             [itonami.auth.config :as config]
             [itonami.auth.oauth :as oauth]
             [itonami.auth.passkey :as passkey]
+            [itonami.auth.recovery :as recovery]
             [itonami.auth.viewer :as viewer]
             [shadow.resource :as rc]))
 
@@ -281,6 +282,42 @@
       (and (= method "GET") (= path (p :session)))
       (.then (passkey/resolve-session! env (cookie-header request))
              (fn [v] (session-json request v)))
+
+      (and (= method "POST") (= path (p :recovery-keys)))
+      (-> (passkey/resolve-session! env (cookie-header request))
+          (.then (fn [session] (.then (recovery/replace-keys! env session) respond))))
+
+      (and (= method "POST") (= path (p :recovery-start)))
+      (-> (read-json request)
+          (.then (fn [body]
+                   (if-not (map? body)
+                     (json {"ok" false "error" "malformed request"} 400)
+                     (.then (recovery/start! env body) respond)))))
+
+      (and (= method "POST") (= path (p :recovery-status)))
+      (-> (read-json request)
+          (.then (fn [body]
+                   (if-not (map? body)
+                     (json {"ok" false "error" "malformed request"} 400)
+                     (.then (recovery/status! env body) respond)))))
+
+      (and (= method "POST") (= path (p :recovery-complete)))
+      (-> (read-json request)
+          (.then (fn [body]
+                   (if-not (map? body)
+                     (json {"ok" false "error" "malformed request"} 400)
+                     (.then (recovery/begin-enrolment! env body) respond)))))
+
+      (and (= method "POST") (= path (p :recovery-finalize)))
+      (-> (read-json request)
+          (.then (fn [body]
+                   (if-not (map? body)
+                     (json {"ok" false "error" "malformed request"} 400)
+                     (.then (recovery/finalize! env body) respond)))))
+
+      (and (= method "POST") (= path (p :recovery-cancel)))
+      (-> (passkey/resolve-session! env (cookie-header request))
+          (.then (fn [session] (.then (recovery/cancel! env session) respond))))
 
       (and (= method "POST") (= path (p :logout)))
       (.then (passkey/logout! env (cookie-header request) false) respond)

@@ -228,6 +228,12 @@
    :login-verify  "/v1/passkey/login/verify"
    :kotoba-link-complete "/v1/kotoba-link/complete"
    :session       "/v1/session"
+   :recovery-keys "/v1/recovery/keys/replace"
+   :recovery-start "/v1/recovery/start"
+   :recovery-status "/v1/recovery/status"
+   :recovery-complete "/v1/recovery/complete"
+   :recovery-finalize "/v1/recovery/finalize"
+   :recovery-cancel "/v1/recovery/cancel"
    ;; No `/v1/credentials` inventory yet. Listing every passkey an account
    ;; holds needs the account record, which lives in the enrolment surface's
    ;; own model — and an inventory that shows one credential because it only
