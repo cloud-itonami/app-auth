@@ -104,7 +104,11 @@
                                        "acr" (or acr config/key-rooted-acr)
                                        "amr" (or amr ["webauthn"])
                                        "authenticatedAt" (or authenticated-at (js/Date.now))}})))
-        (.then (fn [res] {:token token :expires-at (aget res "expires_at")})))))
+        (.then (fn [res]
+                 (if (aget res "ok")
+                   {:token token :expires-at (aget res "expires_at")}
+                   (js/Promise.reject
+                    (js/Error. (or (aget res "reason") "session refused")))))))))
 
 (defn- decide-clone!
   "Compare and record the signCount in one object turn, seeded by the count
@@ -132,6 +136,30 @@
 
 (defn- then-step [p f]
   (.then p (fn [x] (if (done? x) x (f x)))))
+
+(defn- issue-verified-session!
+  [env credential-id record verified]
+  (let [flags {:backup-eligible? (:backup-eligible? verified)
+               :backed-up? (:backed-up? verified)}]
+    (-> (store/principal! env (:did record) credential-id)
+        (.then
+         (fn [{:keys [principal-id account-did credential-active?]}]
+           (if-not credential-active?
+             (refuse "credential-revoked")
+             (let [identity {:principal-id principal-id
+                             :account-did account-did
+                             :active-did (:did record)
+                             :credential-id credential-id}]
+               (store/touch-credential!
+                env credential-id (assoc flags :sign-count (:sign-count verified)))
+               (-> (issue-session! env (merge flags identity))
+                   (.then
+                    (fn [{:keys [token expires-at]}]
+                      {:status 200
+                       :set-cookie (viewer/set-cookie
+                                    token (quot config/session-ttl-ms 1000))
+                       :body (viewer/viewer
+                              (merge flags identity {:expires-at expires-at}))}))))))))))
 
 (defn login-verify!
   "The whole assertion path. Returns a Promise of `{:status :body :set-cookie}`.
@@ -191,26 +219,9 @@
                  ;; person needs to know a second authenticator may be
                  ;; presenting their credential.
                  (refuse "credential-clone-signal")
-                 (let [{:keys [record verified]} @state
-                       flags {:backup-eligible? (:backup-eligible? verified)
-                              :backed-up? (:backed-up? verified)}]
-                   (store/touch-credential!
-                    env credential-id (assoc flags :sign-count (:sign-count verified)))
-                   (-> (store/principal! env (:did record))
-                       (.then
-                        (fn [{:keys [principal-id account-did]}]
-                          (let [identity {:principal-id principal-id
-                                          :account-did account-did
-                                          :active-did (:did record)
-                                          :credential-id credential-id}]
-                            (-> (issue-session! env (merge flags identity))
-                                (.then (fn [{:keys [token expires-at]}]
-                                         {:status 200
-                                          :set-cookie (viewer/set-cookie
-                                                       token (quot config/session-ttl-ms 1000))
-                                          :body (viewer/viewer
-                                                 (merge flags identity
-                                                        {:expires-at expires-at}))}))))))))))))))))
+                 (let [{:keys [record verified]} @state]
+                   (issue-verified-session!
+                    env credential-id record verified))))))))))
 
 ;; ── session reads and revocation ────────────────────────────────────────────
 

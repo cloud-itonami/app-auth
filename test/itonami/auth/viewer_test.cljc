@@ -184,7 +184,11 @@
   (testing "a record without a usable public key is not a credential"
     (is (nil? (viewer/credential-record {"did" "did:key:z6Mk"})))
     (is (nil? (viewer/credential-record {"pubKeyB64" ""})))
-    (is (nil? (viewer/credential-record nil))))
+    (is (nil? (viewer/credential-record nil)))
+    (is (nil? (viewer/credential-record {"pubKeyB64" "B"
+                                         "did" "did:key:z6Mk"
+                                         "revokedAt" 1000}))
+        "a cleanup-delayed recovery record must remain unusable"))
 
   (testing "a missing counter is 0, not nil"
     ;; nil would reach the clone comparison as a non-number and refuse a login

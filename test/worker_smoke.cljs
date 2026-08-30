@@ -37,7 +37,8 @@
   (let [m (js/Map.)]
     (doseq [[k v] records] (.set m k v))
     #js {:get (fn [k] (js/Promise.resolve (or (.get m k) nil)))
-         :put (fn [k v] (.set m k v) (js/Promise.resolve nil))}))
+         :put (fn [k v] (.set m k v) (js/Promise.resolve nil))
+         :delete (fn [k] (.delete m k) (js/Promise.resolve nil))}))
 
 (defn- fake-env
   "`:storage` is accepted so a case can seed a record the ops cannot write —
@@ -118,8 +119,11 @@
                         (str/includes? body "dads-button"))
                  (check "the script is referenced, not inlined"
                         (str/includes? body "src=\"/app.js\""))
-                 (check "all three views are in the one document"
-                        (= 3 (count (re-seq #"data-view=" body))))
+                 (check "all four views are in the one document"
+                        (= 4 (count (re-seq #"data-view=" body))))
+                 (check "recovery stays a separate one-time-key path"
+                        (and (str/includes? body "data-act=\"recovery-start\"")
+                             (str/includes? body "使い捨て復旧キー")))
                  (check "the unreplaced slot is gone"
                         (not (str/includes? body "{{RETURN_TO}}")))
                  (check "the page offers no Email login"
@@ -711,6 +715,84 @@
                  (check "a token this issuer never minted is inactive, not an error"
                         (and (= 200 status) (false? (aget body "active")))))))))
 
+(defn- case-delayed-recovery-is-single-use-and-locks-sessions []
+  (let [env (fake-env)
+        principal "urn:kotoba:principal:recovery-person"
+        account-did "did:web:kotobase.net:person:recovery"
+        continuation (apply str (repeat 64 "b"))
+        keys (mapv (fn [n]
+                     (str (.padStart (.toString n 16) 2 "0")
+                          (apply str (repeat 62 "a"))))
+                   (range 10))
+        session-key "session:before-recovery"]
+    (-> (store-call! env {:op "recovery-keys-replace"
+                          :principal_id principal
+                          :account_did account-did
+                          :tenant "cloud-itonami/example"
+                          :address "owner@example.com"
+                          :generation "generation-1"
+                          :key_digests keys
+                          :now_ms 1000})
+        (.then (fn [body]
+                 (check "ten recovery-key digests are accepted" (true? (aget body "ok")))
+                 (store-call! env {:op "session-put"
+                                   :key session-key :ttl_ms 5000 :now_ms 1000
+                                   :value {"principalId" principal
+                                           "accountDid" account-did
+                                           "activeDid" "did:key:zOld"}})))
+        (.then (fn [body]
+                 (check "an existing session can precede recovery" (true? (aget body "ok")))
+                 (store-call! env {:op "recovery-start"
+                                   :key_digest (first keys)
+                                   :continuation_digest continuation
+                                   :delay_ms 100 :request_ttl_ms 1000 :now_ms 1000})))
+        (.then (fn [body]
+                 (check "one key starts one delayed request" (true? (aget body "ok")))
+                 (check "the wait deadline is exact" (= 1100 (aget body "available_at")))
+                 (store-call! env {:op "recovery-start"
+                                   :key_digest (first keys)
+                                   :continuation_digest (apply str (repeat 64 "c"))
+                                   :delay_ms 100 :request_ttl_ms 1000 :now_ms 1001})))
+        (.then (fn [body]
+                 (check "a spent recovery key cannot be replayed"
+                        (= "invalid-recovery-key" (aget body "reason")))
+                 (store-call! env {:op "recovery-status"
+                                   :continuation_digest continuation :now_ms 1050})))
+        (.then (fn [body]
+                 (check "the request reports waiting before the deadline"
+                        (= "waiting" (aget body "state")))
+                 (store-call! env {:op "recovery-begin-enrolment"
+                                   :continuation_digest continuation :now_ms 1050})))
+        (.then (fn [body]
+                 (check "enrolment is refused during the delay"
+                        (= "recovery-delay-active" (aget body "reason")))
+                 (store-call! env {:op "recovery-begin-enrolment"
+                                   :continuation_digest continuation :now_ms 1100})))
+        (.then (fn [body]
+                 (check "enrolment opens at the deadline" (true? (aget body "ok")))
+                 (store-call! env {:op "session-get" :key session-key :now_ms 1100})))
+        (.then (fn [body]
+                 (check "the recovery lock hides an existing session"
+                        (false? (aget body "found")))
+                 (store-call! env {:op "session-put"
+                                   :key "session:during-recovery" :ttl_ms 5000 :now_ms 1100
+                                   :value {"principalId" principal
+                                           "accountDid" account-did
+                                           "activeDid" "did:key:zOld"}})))
+        (.then (fn [body]
+                 (check "the recovery lock refuses a new session"
+                        (= "recovery-in-progress" (aget body "reason")))
+                 (store-call! env {:op "recovery-finalize"
+                                   :continuation_digest continuation
+                                   :principal_id principal :now_ms 1101})))
+        (.then (fn [body]
+                 (check "finalization consumes the request" (true? (aget body "ok")))
+                 (store-call! env {:op "recovery-status"
+                                   :continuation_digest continuation :now_ms 1102})))
+        (.then (fn [body]
+                 (check "a finalized continuation cannot be replayed"
+                        (= "invalid-recovery-request" (aget body "reason"))))))))
+
 ;; ── run ─────────────────────────────────────────────────────────────────────
 
 (defn- run []
@@ -727,6 +809,8 @@
       (.then #(run-case "Passkey-only routing" case-passkey-only))
       (.then #(run-case "health" case-health))
       (.then #(run-case "Kotoba controller link" case-kotoba-controller-link))
+      (.then #(run-case "delayed one-time recovery"
+                        case-delayed-recovery-is-single-use-and-locks-sessions))
       (.then #(run-case "OAuth PKCE" case-oauth-pkce-is-single-use))
       (.then #(run-case "MCP token: audience and introspection"
                         case-mcp-token-is-audience-bound-and-introspectable))

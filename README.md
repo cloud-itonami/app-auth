@@ -48,12 +48,23 @@ enforced server boundary, not only hidden UI: `/v1/email/*`, `/v1/sso/*`, and
 the former `/v1/methods*` management surface answer 404 even if old provider
 secrets remain installed in the deployment.
 
-Recovery is another passkey. The page names 1Password, Bitwarden, iCloud
-キーチェーン and Google パスワードマネージャー and sends enrolment to
-`itonami.cloud/signin/`, because this Worker has no KEK binding and cannot mint
-a credential itself. Existing legacy route records may remain in Durable
-Object storage until a separate data-retention migration removes them; they
-are not readable or usable as sign-in routes by this Worker.
+Recovery has one separate, deliberately narrow route: ten 160-bit one-time
+recovery keys shown only when they are generated. Only SHA-256 digests are
+stored. Spending one key creates an opaque continuation and an exact 48-hour
+wait; it does not create a session. After the wait the Durable Object locks old
+and new sessions and gives `itonami.cloud/signin/` a 15-minute, single-purpose
+ticket to enrol a replacement Passkey. Completion preserves the Stable
+Principal and account DID, revokes every previous Passkey and session, consumes
+the continuation, and invalidates the remaining recovery-key set. A currently
+authenticated Passkey owner can cancel a pending request or replace the whole
+key set. There is no Email, SMS, help-desk, or SSO override.
+
+The page names 1Password, Bitwarden, iCloud キーチェーン and Google
+パスワードマネージャー and sends enrolment to `itonami.cloud/signin/`, because
+this Worker has no KEK binding and cannot mint a credential itself. Existing
+legacy route records may remain in Durable Object storage until a separate
+data-retention migration removes them; they are not readable or usable as
+sign-in routes by this Worker.
 
 Four more, on the authorization side, each of which is a decision and not an
 oversight-in-progress:

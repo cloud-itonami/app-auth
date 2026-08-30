@@ -16,7 +16,7 @@
   present and inert. This namespace only flips `data-active`, fills text, and
   runs the ceremony. Change the markup and this file together.
 
-    [data-view=\"sign-in\"|\"signed-in\"|\"unsupported\"]
+    [data-view=\"sign-in\"|\"signed-in\"|\"recovery\"|\"unsupported\"]
     [data-act=\"passkey\"|\"logout\"|\"logout-all\"]
     #auth-status  #auth-identity  #auth-backup  [data-return-to]
 
@@ -50,6 +50,7 @@
   deep link."
   [{:id "sign-in"    :fragment "#sign-in"}
    {:id "signed-in"  :fragment "#signed-in"}
+   {:id "recovery"   :fragment "#recovery"}
    {:id "unsupported" :fragment "#unsupported"}])
 
 (defn- show! [id]
@@ -73,7 +74,9 @@
                           :credentials "same-origin"
                           :headers #js {"content-type" "application/json"}
                           :body (js/JSON.stringify (clj->js (or body {})))})
-      (.then (fn [res] (.then (.json res) #(js->clj %))))))
+      (.then (fn [res]
+               (.then (.json res)
+                      #(assoc (js->clj %) "_status" (.-status res)))))))
 
 (defn- get-json [path]
   (-> (js/fetch path #js {:credentials "same-origin"})
@@ -92,6 +95,129 @@
                  (str/join " / " config/key-managers)
                  " のいずれかに保存した予備を作っておくと、端末を失っても入れます。"))))
   (show! "signed-in"))
+
+;; ── delayed recovery ───────────────────────────────────────────────────────
+
+(def recovery-token-storage "itonami.auth.recovery-token")
+
+(defn- stored-recovery-token []
+  (try (js/localStorage.getItem recovery-token-storage)
+       (catch :default _ nil)))
+
+(defn- save-recovery-token! [token]
+  (try (js/localStorage.setItem recovery-token-storage token)
+       (catch :default _ nil)))
+
+(defn- clear-recovery-token! []
+  (try (js/localStorage.removeItem recovery-token-storage)
+       (catch :default _ nil)))
+
+(defn- recovery-message! [message]
+  (when-let [el ($ "#auth-recovery-wait")]
+    (set! (.-textContent el) (or message ""))))
+
+(defn- ready-button! [ready?]
+  (when-let [el ($ "[data-act=\"recovery-complete\"]")]
+    (set! (.-disabled el) (not ready?))))
+
+(defn- format-time [ms]
+  (.toLocaleString (js/Date. ms) "ja-JP"))
+
+(defn- recovery-status! []
+  (if-let [token (stored-recovery-token)]
+    (-> (post (config/endpoint :recovery-status) {"recoveryToken" token})
+        (.then
+         (fn [body]
+           (if-not (get body "ok")
+             (do (clear-recovery-token!)
+                 (ready-button! false)
+                 (recovery-message! "この復旧申請は無効か期限切れです。"))
+             (let [ready? (= "ready" (get body "state"))]
+               (ready-button! ready?)
+               (recovery-message!
+                (if ready?
+                  "待機が完了しました。新しいパスキーを登録できます。"
+                  (str (format-time (get body "availableAt"))
+                       " まで待機します。この間、パスキーを持つ本人は申請を取り消せます。")))))))
+        (.catch (fn [_] (status! "復旧状態を確認できませんでした。" "error"))))
+    (do (ready-button! false)
+        (recovery-message! "復旧キーを入力して待機を開始してください。"))))
+
+(defn- recovery-start! []
+  (let [key (some-> ($ "#auth-recovery-key") .-value str/trim)]
+    (if (str/blank? key)
+      (status! "復旧キーを入力してください。" "error")
+      (-> (post (config/endpoint :recovery-start) {"recoveryKey" key})
+          (.then
+           (fn [body]
+             (if-not (get body "ok")
+               (status! "復旧キーを確認できませんでした。" "error")
+               (do (save-recovery-token! (get body "recoveryToken"))
+                   (set! (.-value ($ "#auth-recovery-key")) "")
+                   (status! "48時間の待機を開始しました。" "ok")
+                   (recovery-status!)))))
+          (.catch (fn [_] (status! "復旧を開始できませんでした。" "error")))))))
+
+(defn- recovery-complete! []
+  (if-let [token (stored-recovery-token)]
+    (-> (post (config/endpoint :recovery-complete) {"recoveryToken" token})
+        (.then
+         (fn [body]
+           (cond
+             (= 425 (get body "_status")) (recovery-status!)
+             (not (get body "ok")) (status! "復旧を続けられませんでした。" "error")
+             :else
+             (let [params (js/URLSearchParams.)]
+               (.set params "token" (get body "enrollmentToken"))
+               (.set params "tenant" (get body "tenant"))
+               (.set params "address" (get body "address"))
+               (.set params "continuation" token)
+               (set! (.-href js/location)
+                     (str (get body "enrolmentUrl")
+                          "#recovery-enroll?" (.toString params)))))))
+        (.catch (fn [_] (status! "復旧を続けられませんでした。" "error"))))
+    (status! "先に復旧キーを確認してください。" "error")))
+
+(defn- replace-recovery-keys! []
+  (-> (post (config/endpoint :recovery-keys) {})
+      (.then
+       (fn [body]
+         (if-not (get body "ok")
+           (status! (if (= "reauthentication-required" (get body "error"))
+                      "復旧キーの作成には、直前のパスキー確認が必要です。サインアウトして入り直してください。"
+                      "復旧キーを作成できませんでした。") "error")
+           (do (set! (.-textContent ($ "#auth-recovery-key-list"))
+                     (str/join "\n" (get body "keys")))
+               (set! (.-hidden ($ "#auth-recovery-keys")) false)
+               (status! "以前の復旧キーを無効化し、新しい10個を作成しました。" "ok")))))
+      (.catch (fn [_] (status! "復旧キーを作成できませんでした。" "error")))))
+
+(defn- copy-recovery-keys! []
+  (when-let [value (some-> ($ "#auth-recovery-key-list") .-textContent)]
+    (-> (js/navigator.clipboard.writeText value)
+        (.then (fn [_] (status! "復旧キーをコピーしました。" "ok")))
+        (.catch (fn [_] (status! "コピーできませんでした。手動で選択してください。" "error"))))))
+
+(defn- cancel-recovery! []
+  (-> (post (config/endpoint :recovery-cancel) {})
+      (.then (fn [body]
+               (if (get body "ok")
+                 (do (clear-recovery-token!) (status! "復旧申請を取り消しました。" "ok"))
+                 (status! "復旧申請を取り消せませんでした。" "error"))))
+      (.catch (fn [_] (status! "復旧申請を取り消せませんでした。" "error")))))
+
+(defn- finalize-recovery! [token]
+  (-> (post (config/endpoint :recovery-finalize) {"recoveryToken" token})
+      (.then (fn [body]
+               (if (get body "ok")
+                 (do (clear-recovery-token!)
+                     (show! "sign-in")
+                     (status! "復旧が完了しました。新しいパスキーでサインインしてください。" "ok"))
+                 (do (show! "recovery")
+                     (status! "新しいパスキーの登録を確認できませんでした。" "error")))))
+      (.catch (fn [_]
+                (show! "recovery")
+                (status! "復旧の完了を確認できませんでした。" "error")))))
 
 (defn- sign-in! []
   (status! "パスキーを確認しています…" nil)
@@ -162,12 +288,32 @@
       )
     (some-> ($ "[data-act=\"logout\"]") (.addEventListener "click" #(logout! false)))
     (some-> ($ "[data-act=\"logout-all\"]") (.addEventListener "click" #(logout! true)))
+    (some-> ($ "[data-act=\"recovery-open\"]")
+            (.addEventListener "click" #(do (show! "recovery") (recovery-status!))))
+    (some-> ($ "[data-act=\"recovery-back\"]")
+            (.addEventListener "click" #(show! "sign-in")))
+    (some-> ($ "[data-act=\"recovery-start\"]")
+            (.addEventListener "click" #(recovery-start!)))
+    (some-> ($ "[data-act=\"recovery-status\"]")
+            (.addEventListener "click" #(recovery-status!)))
+    (some-> ($ "[data-act=\"recovery-complete\"]")
+            (.addEventListener "click" #(recovery-complete!)))
+    (some-> ($ "[data-act=\"recovery-keys-replace\"]")
+            (.addEventListener "click" #(replace-recovery-keys!)))
+    (some-> ($ "[data-act=\"recovery-keys-copy\"]")
+            (.addEventListener "click" #(copy-recovery-keys!)))
+    (some-> ($ "[data-act=\"recovery-cancel\"]")
+            (.addEventListener "click" #(cancel-recovery!)))
     ;; Ask who is already here before offering to sign anyone in: arriving
     ;; at a sign-in page with a live session and being asked to authenticate
     ;; again is the most common way a session silently is not working.
-    (-> (get-json (config/endpoint :session))
-        (.then (fn [viewer]
-                 (if (get viewer "valid") (signed-in! viewer) (show! "sign-in"))
-                 (when (.get (js/URLSearchParams. (.-search js/location)) "error")
-                   (status! "サインインを完了できませんでした。" "error"))))
-        (.catch (fn [_] (show! "sign-in"))))))
+    (if (str/starts-with? (.-hash js/location) "#recovery-finalize=")
+      (finalize-recovery!
+       (js/decodeURIComponent
+        (subs (.-hash js/location) (count "#recovery-finalize="))))
+      (-> (get-json (config/endpoint :session))
+          (.then (fn [viewer]
+                   (if (get viewer "valid") (signed-in! viewer) (show! "sign-in"))
+                   (when (.get (js/URLSearchParams. (.-search js/location)) "error")
+                     (status! "サインインを完了できませんでした。" "error"))))
+          (.catch (fn [_] (show! "sign-in")))))))
