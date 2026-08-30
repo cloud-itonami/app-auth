@@ -17,8 +17,8 @@ replaced rather than ported: see ADR-2608110100.
 
 | | |
 |---|---|
-| **Does** | verify a WebAuthn assertion, attach/list/detach a verified Apple/Google/GitHub/Microsoft/Email route on that passkey DID, issue and revoke an opaque browser session, exchange a one-minute Authorization Code + PKCE for a five-minute native-app token, bind that token to one RFC 8707 resource and answer RFC 7662 introspection about it |
-| **Does not** | enrol a passkey, mint or hold an itonami signing key, create or merge an identity from email equality, ask a person to consent to a scope (so no client holds one that would need it), refresh a token, or register a client dynamically |
+| **Does** | verify a WebAuthn assertion, issue and revoke an opaque browser session, exchange a one-minute Authorization Code + PKCE for a five-minute native-app token, bind that token to one RFC 8707 resource and answer RFC 7662 introspection about it |
+| **Does not** | offer Email or upstream SSO login, enrol a passkey, mint or hold an itonami signing key, ask a person to consent to a scope (so no client holds one that would need it), refresh a token, or register a client dynamically |
 
 Enrolment stays at `itonami.cloud/signin/`, which owns custody: registration
 there mints a server-custodied Ed25519 key wrapped under a KEK. **This Worker
@@ -40,54 +40,20 @@ long-lived bearer token from the controller.
 does not move to the apex; the apex can only render whether its own Itonami
 session is connected.
 
-## The key is the root; Email and SSO are routes attached to it
+## Passkey is the only login route
 
-A passkey — held in a credential manager, which is where
-`itonami.auth.config/key-managers` names 1Password, Bitwarden, iCloud
-キーチェーン and Google パスワードマネージャー on the page itself — is what an
-account IS. Email and SSO are **routes**: a way back in when a device is gone,
-and a second way to sign in afterwards. Three rules keep that ordering true
-rather than merely intended.
+The page exposes only WebAuthn, and the Worker has no route handlers for the
+retired Email, Apple, Google, GitHub, or Microsoft login paths. This is an
+enforced server boundary, not only hidden UI: `/v1/email/*`, `/v1/sso/*`, and
+the former `/v1/methods*` management surface answer 404 even if old provider
+secrets remain installed in the deployment.
 
-**Only the key may re-arrange the routes.** `viewer/key-rooted?` admits a
-session only when the passkey itself authenticated it (`acr`
-`phishing-resistant`). A `single-factor` session signs in, reaches the app and
-holds a native-app token, but cannot attach or detach anything. Without this,
-ten minutes of inbox access is enough to attach a provider the owner never
-chose — and, before the index below existed, could not see or remove.
-
-**Every route is visible.** The forward record answers `subject -> did`, which
-is all a sign-in needs and nothing an owner can act on: there is no way to ask
-it what a given key answers to. `AuthStore` therefore writes
-`did-identity:<did>:<key>` in the same object turn as the link, for the reason
-`session-put` writes its own index inline — a record without its index is a
-record the management surface cannot see, and an invisible route is worse than
-no route. `GET /v1/methods` returns them for a live session. Routes linked
-before the index existed are healed on their next sign-in rather than by a
-migration batch, the way `cloud-itonami.account/adopt-legacy-credential` does
-it on the enrolment plane.
-
-**Every route can be removed.** `POST /v1/methods/unlink` deletes both halves
-atomically, and the stored record's own `did` decides — never the caller's
-claim. Missing and not-yours are the same answer, so holding any session
-cannot confirm whether a guessed key belongs to somebody. Detaching the *last*
-route is allowed: the key is the root and a route is not, and refusing would
-say otherwise (`cloud-itonami.account/detach-email` draws the line in the same
-place, and refuses only for the last passkey).
-
-An unknown subject is still sent back with `link_required`; it never creates a
-DID, and an already-linked subject cannot be rebound to another DID. These
-decisions are atomic in `AuthStore`, so two concurrent callbacks cannot claim
-one subject for different accounts.
-
-### What this Worker still cannot close
-
-Recovery ends here at a link, not at a new passkey: with no KEK binding this
-Worker cannot enrol, so the signed-in view sends someone to
-`itonami.cloud/signin/` for a spare key. And SSO subjects are held only here —
-the enrolment plane's account record tracks `:account/emails` but has no
-equivalent for upstream providers, so its `recovery-posture` does not count
-them. Both are noted rather than papered over.
+Recovery is another passkey. The page names 1Password, Bitwarden, iCloud
+キーチェーン and Google パスワードマネージャー and sends enrolment to
+`itonami.cloud/signin/`, because this Worker has no KEK binding and cannot mint
+a credential itself. Existing legacy route records may remain in Durable
+Object storage until a separate data-retention migration removes them; they
+are not readable or usable as sign-in routes by this Worker.
 
 Four more, on the authorization side, each of which is a decision and not an
 oversight-in-progress:
@@ -108,36 +74,6 @@ oversight-in-progress:
   cloud-itonami-app must map that subject to its local membership before an
   audience-correct, scope-correct token can act. Identity continuity does not
   invent membership. Measured, not assumed.
-
-Every provider uses a five-minute, single-use state and Authorization Code
-flow. Google, GitHub, and Microsoft use PKCE S256 in addition to their Worker
-secret. Apple uses `form_post`; its client-secret JWT is generated in the
-Worker from the scoped P-256 key, and Apple's ID token signature, issuer,
-audience, nonce and expiry are verified before its subject is accepted.
-Email links are ten-minute, single-use opaque tokens stored only by digest and
-sent through the existing authenticated itonami.cloud delivery endpoint.
-
-The callback URIs to register are:
-
-```text
-https://auth.itonami.cloud/v1/sso/callback/apple
-https://auth.itonami.cloud/v1/sso/callback/google
-https://auth.itonami.cloud/v1/sso/callback/github
-https://auth.itonami.cloud/v1/sso/callback/microsoft
-```
-
-Provider configuration is fail-closed. A button is published only when all of
-its exact Worker bindings exist:
-
-```text
-GOOGLE_CLIENT_ID       GOOGLE_CLIENT_SECRET
-GITHUB_CLIENT_ID       GITHUB_CLIENT_SECRET
-MICROSOFT_CLIENT_ID    MICROSOFT_CLIENT_SECRET
-APPLE_CLIENT_ID        APPLE_TEAM_ID        APPLE_KEY_ID        APPLE_PRIVATE_KEY
-EMAIL_DELIVERY_TOKEN
-```
-
-Values are installed with `wrangler secret put <NAME>` and are never committed.
 
 ## Tokens a resource server can check
 
@@ -225,7 +161,6 @@ src/itonami/auth/durable.cljs   AuthStore — everything needing read-your-write
 src/itonami/auth/store.cljs     KV credentials (read-mostly) + the DO client
 src/itonami/auth/passkey.cljs   the ceremony, in the order that matters
 src/itonami/auth/oauth.cljs     fixed native client, code exchange, userinfo
-src/itonami/auth/federated.cljs upstream OAuth, Apple token validation, Email
 src/itonami/auth/worker.cljs    routes
 browser/itonami/auth/app.cljs   the page's behaviour (compiled, not hand-written JS)
 pages/itonami/auth/sign_in_page.cljc   the document (jp-go-dds, build-time only)

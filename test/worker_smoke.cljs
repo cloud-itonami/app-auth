@@ -121,7 +121,11 @@
                  (check "all three views are in the one document"
                         (= 3 (count (re-seq #"data-view=" body))))
                  (check "the unreplaced slot is gone"
-                        (not (str/includes? body "{{RETURN_TO}}"))))))))
+                        (not (str/includes? body "{{RETURN_TO}}")))
+                 (check "the page offers no Email login"
+                        (not (str/includes? body "email-form")))
+                 (check "the page offers no upstream SSO login"
+                        (not (str/includes? body "data-sso"))))))))
 
 (defn- case-return-to []
   (let [env (fake-env)]
@@ -238,6 +242,32 @@
         (.then (fn [res]
                  (check "a path that merely shares a prefix is not ours"
                         (= 404 (.-status res))))))))
+
+(defn- case-passkey-only []
+  (let [env (fake-env :bindings {"EMAIL_DELIVERY_TOKEN" "delivery"
+                                 "GOOGLE_CLIENT_ID" "google-client"
+                                 "GOOGLE_CLIENT_SECRET" "google-secret"})
+        requests [["SSO start" "https://auth.itonami.cloud/v1/sso/google" {}]
+                  ["SSO callback" "https://auth.itonami.cloud/v1/sso/callback/google?code=x&state=y" {}]
+                  ["Email start" "https://auth.itonami.cloud/v1/email/start"
+                   {:method "POST"
+                    :headers {"content-type" "application/json"}
+                    :body "{\"email\":\"person@example.com\"}"}]
+                  ["Email verify" "https://auth.itonami.cloud/v1/email/verify?token=x" {}]
+                  ["method inventory" "https://auth.itonami.cloud/v1/methods" {}]
+                  ["method unlink" "https://auth.itonami.cloud/v1/methods/unlink"
+                   {:method "POST"
+                    :headers {"content-type" "application/json"}
+                    :body "{\"key\":\"identity:google:x\"}"}]]]
+    (-> (js/Promise.all
+         (into-array (map (fn [[_ url options]] (fetch! env url options)) requests)))
+        (.then
+         (fn [responses]
+           (doseq [[idx [label]] (map-indexed vector requests)]
+             (let [res (aget responses idx)]
+               (check (str label " is closed even when legacy secrets exist")
+                      (and (= 404 (.-status res))
+                           (nil? (.get (.-headers res) "location")))))))))))
 
 (defn- case-health []
   (let [env (fake-env)]
@@ -694,14 +724,12 @@
       (.then #(run-case "origin allowlist" case-origin-is-checked))
       (.then #(run-case "logout" case-logout-always-clears))
       (.then #(run-case "routing" case-not-found))
+      (.then #(run-case "Passkey-only routing" case-passkey-only))
       (.then #(run-case "health" case-health))
       (.then #(run-case "Kotoba controller link" case-kotoba-controller-link))
-      (.then #(run-case "federated methods and linking" case-federated-methods-and-linking))
       (.then #(run-case "OAuth PKCE" case-oauth-pkce-is-single-use))
       (.then #(run-case "MCP token: audience and introspection"
                         case-mcp-token-is-audience-bound-and-introspectable))
-      (.then #(run-case "routes are visible and removable" case-routes-are-manageable))
-      (.then #(run-case "a legacy link heals its index" case-legacy-link-heals))
       (.then (fn [_]
                (if (zero? @failures)
                  (println "\nworker smoke: all checks passed")

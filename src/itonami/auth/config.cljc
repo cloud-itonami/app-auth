@@ -227,16 +227,6 @@
    :login-options "/v1/passkey/login/options"
    :login-verify  "/v1/passkey/login/verify"
    :kotoba-link-complete "/v1/kotoba-link/complete"
-   :sso-start     "/v1/sso"
-   :sso-callback  "/v1/sso/callback"
-   :email-start   "/v1/email/start"
-   :email-verify  "/v1/email/verify"
-   :methods       "/v1/methods"
-   ;; Detaching a route. There is no `/v1/methods/link`: linking is what the
-   ;; SSO and Email flows already do when they finish inside a key-rooted
-   ;; session, and a second way in would be a second place to get the
-   ;; `key-rooted?` check wrong.
-   :method-unlink "/v1/methods/unlink"
    :session       "/v1/session"
    ;; No `/v1/credentials` inventory yet. Listing every passkey an account
    ;; holds needs the account record, which lives in the enrolment surface's

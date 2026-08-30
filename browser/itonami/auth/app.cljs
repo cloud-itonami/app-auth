@@ -19,17 +19,10 @@
     [data-view=\"sign-in\"|\"signed-in\"|\"unsupported\"]
     [data-act=\"passkey\"|\"logout\"|\"logout-all\"]
     #auth-status  #auth-identity  #auth-backup  [data-return-to]
-    #auth-routes  #auth-routes-empty  #auth-method-mode  #auth-manage-note
-    #sso-methods [data-sso]  #email-form #email-address
 
-  ## The key is the root; the routes hang off it
-
-  A passkey held in a credential manager is what this account IS. Email and
-  SSO are routes attached to it — a way back in, and a second way to sign in.
-  Two consequences show up here: the routes list is drawn from what the
-  account actually has (`GET /v1/methods`) rather than from what the server
-  could offer, and the detach control appears only when `canManage` says this
-  session was authenticated by the key itself."
+  Passkey is the only interactive sign-in route. The Worker also refuses the
+  retired Email and upstream-SSO endpoints, so removing their controls here is
+  not a presentation-only policy."
   (:require [clojure.string :as str]
             [itonami.auth.config :as config]))
 
@@ -100,124 +93,6 @@
                  " のいずれかに保存した予備を作っておくと、端末を失っても入れます。"))))
   (show! "signed-in"))
 
-(declare setup-methods!)
-
-(defn- unlink! [key]
-  (status! "経路を外しています…" nil)
-  (-> (post (config/endpoint :method-unlink) {"key" key})
-      (.then (fn [result]
-               (if (get result "ok")
-                 (do (status! "経路を外しました。" "ok") (setup-methods! nil))
-                 (status! (case (get result "error")
-                            "passkey_required"
-                            "経路を外すにはパスキーでサインインしてください。"
-                            "not_linked" "その経路はもう繋がっていません。"
-                            "経路を外せませんでした。")
-                          "error"))))
-      (.catch (fn [_] (status! "経路を外せませんでした。" "error")))))
-
-(defn- render-routes!
-  "Draw one `<li>` per attached route.
-
-  Built with `createElement` and `textContent`, never by assigning a string to
-  `innerHTML`: `label` is derived from a value an upstream provider returned,
-  and the one page on this origin that must never interpret provider-supplied
-  text as markup is this one."
-  [routes can-manage?]
-  (when-let [list ($ "#auth-routes")]
-    (set! (.-textContent list) "")
-    (doseq [route routes]
-      (let [li (js/document.createElement "li")
-            what (js/document.createElement "div")
-            name (js/document.createElement "span")]
-        (set! (.-className li) "auth-route")
-        (set! (.-className what) "auth-route__what")
-        (set! (.-textContent name) (get route "name"))
-        (.appendChild what name)
-        (when-let [label (get route "label")]
-          (let [el (js/document.createElement "span")]
-            (set! (.-className el) "auth-route__label")
-            (set! (.-textContent el) label)
-            (.appendChild what el)))
-        (.appendChild li what)
-        ;; The detach control is present only when this session may actually
-        ;; use it. A disabled button that never enables reads as broken, and
-        ;; the reason it is absent is said once in #auth-manage-note.
-        (when can-manage?
-          (let [button (js/document.createElement "button")]
-            (set! (.-type button) "button")
-            ;; DADS styles a button by `class="dads-button"` plus the
-            ;; `data-type`/`data-size` ATTRIBUTES — not by modifier classes
-            ;; (`jp-go-dds.core/button`). A `dads-button--outline` here would
-            ;; render an unstyled control that still looked right in the
-            ;; source. This is the one place the page builds that markup
-            ;; without the component, because the rows are dynamic.
-            (set! (.-className button) "dads-button")
-            (.setAttribute button "data-type" "outline")
-            (.setAttribute button "data-size" "sm")
-            (set! (.-textContent button) "外す")
-            (.setAttribute button "data-unlink" (get route "key"))
-            (.addEventListener button "click" #(unlink! (get route "key")))
-            (.appendChild li button)))
-        (.appendChild list li)))
-    (when-let [empty ($ "#auth-routes-empty")]
-      (set! (.-hidden empty) (boolean (seq routes))))))
-
-(defn- setup-methods!
-  "Draw the key's routes and the ways to attach another.
-
-  `viewer` may be nil, which means \"re-read it\" — after a detach the page
-  must not redraw from the session it captured at load, or the list shows the
-  route it just removed."
-  [viewer]
-  (-> (get-json (config/endpoint :methods))
-      (.then
-       (fn [methods]
-         (let [signed-in? (if (nil? viewer)
-                            (seq (get methods "linked"))
-                            (get viewer "valid"))
-               can-manage? (get methods "canManage")]
-           (doseq [provider (get methods "sso")]
-             (when-let [el ($ (str "[data-sso=\"" (get provider "id") "\"]"))]
-               ;; Offered when this deployment has the bindings AND this
-               ;; session may attach. An anonymous visitor still sees them:
-               ;; a linked provider is a way to sign in, not only a way to
-               ;; attach.
-               (set! (.-hidden el) (not (get provider "configured")))
-               (.setAttribute el "href"
-                              (str (config/endpoint :sso-start) "/" (get provider "id")
-                                   "?return_to=" (js/encodeURIComponent (return-to))))
-               (set! (.-textContent el)
-                     (cond
-                       (get provider "linked") (str (get provider "name") " は連携済み")
-                       can-manage? (str (get provider "name") " を繋ぐ")
-                       :else (str (get provider "name") " で続ける")))))
-           (when-let [form ($ "#email-form")]
-             (set! (.-hidden form) (not (get methods "email"))))
-           (render-routes! (get methods "linked") can-manage?)
-           (when-let [mode ($ "#auth-method-mode")]
-             (set! (.-textContent mode)
-                   (cond
-                     can-manage?
-                     "パスキーが本人の根です。ここに繋いだ Email / SSO は、端末を失ったときの復旧経路であり、次回からの別のサインイン方法にもなります。"
-                     signed-in?
-                     "いまは Email / SSO でサインインしています。経路の追加・解除はパスキーでサインインしているときだけできます。"
-                     :else
-                     "連携済みの Email / SSO でもサインインできます。最初の 1 回はパスキーが必要です。")))
-           (when-let [note ($ "#auth-manage-note")]
-             (set! (.-hidden note) (boolean can-manage?))))))
-      (.catch (fn [_] nil))))
-
-(defn- email! [event]
-  (.preventDefault event)
-  (status! "確認リンクを送っています…" nil)
-  (-> (post (config/endpoint :email-start)
-            {"email" (some-> ($ "#email-address") .-value)
-             "returnTo" (return-to)})
-      (.then (fn [_]
-               (status! "手続きできるアドレスには、10分有効なリンクを送りました。" "ok")))
-      (.catch (fn [_] (status! "リンクを送れませんでした。" "error")))))
-
 (defn- sign-in! []
   (status! "パスキーを確認しています…" nil)
   (-> (post (config/endpoint :login-options) {})
@@ -275,10 +150,7 @@
   (-> (post (config/endpoint (if all? :logout-all :logout)) {})
       (.then (fn [_]
                (show! "sign-in")
-               (status! "サインアウトしました。" "ok")
-               ;; Redraw: `canManage` is now false, so the detach controls
-               ;; must go. Leaving them would offer an action that 401s.
-               (setup-methods! {"valid" false})))
+               (status! "サインアウトしました。" "ok")))
       (.catch (fn [_] (status! "サインアウトできませんでした。" "error")))))
 
 ;; ── init ────────────────────────────────────────────────────────────────────
@@ -290,18 +162,12 @@
       )
     (some-> ($ "[data-act=\"logout\"]") (.addEventListener "click" #(logout! false)))
     (some-> ($ "[data-act=\"logout-all\"]") (.addEventListener "click" #(logout! true)))
-    (some-> ($ "#email-form") (.addEventListener "submit" email!))
     ;; Ask who is already here before offering to sign anyone in: arriving
     ;; at a sign-in page with a live session and being asked to authenticate
     ;; again is the most common way a session silently is not working.
     (-> (get-json (config/endpoint :session))
         (.then (fn [viewer]
                  (if (get viewer "valid") (signed-in! viewer) (show! "sign-in"))
-                 (setup-methods! viewer)
-                 (when-let [error (.get (js/URLSearchParams. (.-search js/location)) "error")]
-                   (status! (case error
-                              "link_required" "この方法はまだ DID に連携されていません。先にパスキーでサインインしてください。"
-                              "email_invalid" "Email リンクが無効または期限切れです。"
-                              "provider_cancelled" "プロバイダーでのサインインを中止しました。"
-                              "サインインを完了できませんでした。") "error"))))
+                 (when (.get (js/URLSearchParams. (.-search js/location)) "error")
+                   (status! "サインインを完了できませんでした。" "error"))))
         (.catch (fn [_] (show! "sign-in"))))))
