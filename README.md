@@ -42,6 +42,11 @@ session is connected.
 
 ## Passkey is the only login route
 
+This is a permanent security boundary, not a product preference. The normative
+decision, forbidden trust roots, no-downgrade rule, and delayed recovery
+invariants are recorded in
+[`docs/adr/0001-passkey-only-authentication-and-delayed-recovery.md`](docs/adr/0001-passkey-only-authentication-and-delayed-recovery.md).
+
 The page exposes only WebAuthn, and the Worker has no route handlers for the
 retired Email, Apple, Google, GitHub, or Microsoft login paths. This is an
 enforced server boundary, not only hidden UI: `/v1/email/*`, `/v1/sso/*`, and
