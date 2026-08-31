@@ -15,6 +15,7 @@
   ClojureScript only."
   (:require [clojure.string :as str]
             [itonami.auth.config :as config]
+            [itonami.auth.issuer :as issuer]
             [itonami.auth.oauth :as oauth]
             [itonami.auth.passkey :as passkey]
             [itonami.auth.recovery :as recovery]
@@ -278,6 +279,9 @@
 
       (and (= method "POST") (= path (p :kotoba-link-complete)))
       (complete-kotoba-controller-link! request env)
+
+      (and (= method "POST") (= path (p :biscuit-token)))
+      (issuer/mint! env request)
 
       (and (= method "GET") (= path (p :session)))
       (.then (passkey/resolve-session! env (cookie-header request))

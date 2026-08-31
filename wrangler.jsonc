@@ -49,6 +49,14 @@
   // Read-mostly. The one write is the shared signCount/backup record, kept in
   // step so the other surface's clone check does not go stale while this one
   // is in use (itonami.auth.store/touch-credential!).
+  // The one Biscuit issuer (ADR-2608261300: only kotobase-authn holds
+  // BISCUIT_ROOT_SEED_B64URL). This apex forwards /v1/biscuit/token there and
+  // returns the answer verbatim; it never mints, so no root key reaches this
+  // Worker and there is no second issuer to drift.
+  "services": [
+    { "binding": "AUTHN_SERVICE", "service": "kotobase-authn" }
+  ],
+
   "kv_namespaces": [
     {
       "binding": "ITONAMI_DATA",

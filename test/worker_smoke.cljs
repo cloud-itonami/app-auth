@@ -807,6 +807,102 @@
 
 ;; ── run ─────────────────────────────────────────────────────────────────────
 
+(defn- recording-issuer
+  "A stand-in for kotobase-authn that records what reached it. The point of
+  these cases is what this Worker SENDS, so the fake has to be able to answer
+  `what did you receive`."
+  [seen & {:keys [status body set-cookie throw?]
+           :or {status 200 body "{\"token\":\"mrb_stub\"}"}}]
+  #js {:fetch (fn [^js req]
+                (if throw?
+                  (js/Promise.reject (js/Error. "binding is down"))
+                  (-> (.text req)
+                      (.then (fn [text]
+                               (reset! seen {:url (.-url req)
+                                             :method (.-method req)
+                                             :body text
+                                             :authorization (.. req -headers (get "authorization"))
+                                             :cookie (.. req -headers (get "cookie"))
+                                             :tenant (.. req -headers (get "x-kotobase-tenant"))
+                                             :content-type (.. req -headers (get "content-type"))})
+                               (js/Response. body
+                                             (clj->js
+                                              {:status status
+                                               :headers (cond-> {"content-type" "application/json"}
+                                                          set-cookie (assoc "set-cookie" set-cookie))})))))))})
+
+(defn- case-issuer-is-forwarded-never-minted []
+  ;; ADR-2608311600 §5.2: this apex answered 404 to /v1/biscuit/token while
+  ;; holding the fleet's most advanced passkey plane. It forwards now. It must
+  ;; not MINT: the root seed belongs to kotobase-authn and to nothing else.
+  (let [seen (atom nil)]
+    (-> (fetch! (fake-env) "https://auth.itonami.cloud/v1/biscuit/token"
+                {:method "POST" :body "{}"
+                 :headers {"content-type" "application/json"}})
+        (.then (fn [^js res]
+                 (check "unbound issuer is 503, not 404 and not 401"
+                        (= 503 (.-status res)))
+                 (.text res)))
+        (.then (fn [text]
+                 (check "the 503 says the binding is missing, not that the caller is wrong"
+                        (str/includes? text "AUTHN_SERVICE"))))
+
+        (.then (fn [_]
+                 (fetch! (fake-env :bindings {:AUTHN_SERVICE (recording-issuer seen)})
+                         "https://auth.itonami.cloud/v1/biscuit/token"
+                         {:method "POST"
+                          :body "{\"tenantId\":\"t_abcdefghijkl\"}"
+                          :headers {"content-type" "application/json"
+                                    "authorization" "Bearer sa_secret"
+                                    "cookie" "gftd_session=itonami-side-session"
+                                    "x-kotobase-tenant" "t_abcdefghijkl"}})))
+        (.then (fn [^js res]
+                 (check "the issuer was reached" (some? @seen))
+                 (check "at the shared mint path"
+                        (str/ends-with? (:url @seen) "/v1/biscuit/token"))
+                 (check "the body is passed through" (= "{\"tenantId\":\"t_abcdefghijkl\"}" (:body @seen)))
+                 (check "the credential is forwarded" (= "Bearer sa_secret" (:authorization @seen)))
+                 ;; The whole reason this is a forward and not a mint: one
+                 ;; apex's session names must not be interpreted in another's.
+                 (check "the COOKIE is not forwarded" (nil? (:cookie @seen)))
+                 (check "a well-formed tenant selector is forwarded"
+                        (= "t_abcdefghijkl" (:tenant @seen)))
+                 (check "the issuer's status is returned unchanged" (= 200 (.-status res)))
+                 (.text res)))
+        (.then (fn [text] (check "the issuer's body is returned unchanged"
+                                 (str/includes? text "mrb_stub"))))
+
+        (.then (fn [_]
+                 (fetch! (fake-env :bindings {:AUTHN_SERVICE (recording-issuer seen)})
+                         "https://auth.itonami.cloud/v1/biscuit/token"
+                         {:method "POST" :body "{}"
+                          :headers {"content-type" "application/json"
+                                    "x-kotobase-tenant" "../../etc/passwd"}})))
+        (.then (fn [_]
+                 (check "a malformed tenant selector is dropped, not passed on"
+                        (nil? (:tenant @seen)))))
+
+        ;; The issuer must not be able to set a session on THIS apex's domain.
+        (.then (fn [_]
+                 (fetch! (fake-env :bindings
+                                   {:AUTHN_SERVICE (recording-issuer seen :set-cookie "gftd_session=x; Domain=itonami.cloud")})
+                         "https://auth.itonami.cloud/v1/biscuit/token"
+                         {:method "POST" :body "{}"
+                          :headers {"content-type" "application/json"}})))
+        (.then (fn [^js res]
+                 (check "set-cookie from the issuer is stripped"
+                        (nil? (.. res -headers (get "set-cookie"))))))
+
+        (.then (fn [_]
+                 (fetch! (fake-env :bindings {:AUTHN_SERVICE (recording-issuer seen :throw? true)})
+                         "https://auth.itonami.cloud/v1/biscuit/token"
+                         {:method "POST" :body "{}"
+                          :headers {"content-type" "application/json"}})))
+        (.then (fn [^js res]
+                 ;; A binding that is down is not a caller who is unauthorized.
+                 (check "an unreachable issuer is 502, not 401 and not 200"
+                        (= 502 (.-status res))))))))
+
 (defn- run []
   (-> (js/Promise.resolve nil)
       (.then #(run-case "page" case-page))
@@ -826,6 +922,8 @@
       (.then #(run-case "OAuth PKCE" case-oauth-pkce-is-single-use))
       (.then #(run-case "MCP token: audience and introspection"
                         case-mcp-token-is-audience-bound-and-introspectable))
+      (.then #(run-case "Biscuit issuance is forwarded, never minted here"
+                        case-issuer-is-forwarded-never-minted))
       (.then (fn [_]
                (if (zero? @failures)
                  (println "\nworker smoke: all checks passed")
