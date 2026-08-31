@@ -227,6 +227,10 @@
    :login-options "/v1/passkey/login/options"
    :login-verify  "/v1/passkey/login/verify"
    :kotoba-link-complete "/v1/kotoba-link/complete"
+   ;; Forwarded to kotobase-authn, never minted here — see itonami.auth.issuer.
+   ;; The path is the shared one on purpose: a caller that can mint at
+   ;; auth.kotobase.net mints the same way here.
+   :biscuit-token "/v1/biscuit/token"
    :session       "/v1/session"
    :recovery-keys "/v1/recovery/keys/replace"
    :recovery-start "/v1/recovery/start"

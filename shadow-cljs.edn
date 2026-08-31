@@ -17,6 +17,26 @@
 ;; have that arity. Same shape (and same reason) as authn.durable.
 {:deps   {:aliases [:cljs]}
  :builds {:worker
+          ;; ⚠ `shadow-cljs release worker` EXITS 0 on an undeclared namespace.
+          ;;
+          ;; Measured 2026-08-31: a `:require` that was never inserted produced
+          ;; `No such namespace: issuer, could not locate issuer.cljs` and
+          ;; `variable issuer is undeclared`, and the build succeeded anyway,
+          ;; emitting `issuer.Ac(b,a)` -- a call into a global that does not
+          ;; exist. The route would have thrown ReferenceError on its first
+          ;; production request.
+          ;;
+          ;; `:warnings-as-errors true` was tried as the fix, at the top level
+          ;; of this file and then inside this build map, and the defect was
+          ;; re-introduced to test it BOTH times: the build still exited 0 with
+          ;; the same two warnings. It is not recorded here because a guard
+          ;; that cannot be shown to fail is worse than none -- it would read
+          ;; as protection nobody has.
+          ;;
+          ;; What actually caught it is `test/worker_smoke.cljs`, which runs
+          ;; THIS artifact and aborted with `issuer is not defined` (exit 1).
+          ;; That is why `npm run check` is build + test + test:worker and not
+          ;; build alone.
           {:target     :esm
            :output-dir "js"
            :modules    {:auth-worker
