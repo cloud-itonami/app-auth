@@ -16,7 +16,7 @@
 
     npx nbb test/worker_smoke.cljs"
   (:require ["../js/auth-worker.js" :as worker]
-            [clojure.string :as str]))
+            [kotoba.lang.text :as str]))
 
 ;; ── an in-memory Cloudflare ─────────────────────────────────────────────────
 

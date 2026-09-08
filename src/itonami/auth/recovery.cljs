@@ -6,7 +6,7 @@
   a 15-minute ticket for the existing KEK-owning enrolment surface; it never
   creates a normal session and never gives this Worker custody of signing
   keys."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [itonami.auth.config :as config]
             [itonami.auth.store :as store]
             [itonami.auth.viewer :as viewer]))
@@ -21,7 +21,7 @@
   (->> (array-seq (js/crypto.getRandomValues (js/Uint8Array. n)))
        (map (fn [b] (.padStart (.toString b 16) 2 "0")))
        (apply str)
-       str/upper-case))
+       str/upper))
 
 (defn- format-key [hex]
   (str "ITONAMI-" (str/join "-" (map #(apply str %) (partition 4 hex)))))
@@ -30,7 +30,7 @@
 
 (defn normalize-key [s]
   (when (string? s)
-    (let [compact (-> s str/upper-case (str/replace #"[\s-]" ""))]
+    (let [compact (-> s str/upper (str/replace #"[\s-]" ""))]
       (when (re-matches #"ITONAMI[0-9A-F]{40}" compact) compact))))
 
 (defn sha256-hex [s]

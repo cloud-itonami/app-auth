@@ -31,7 +31,7 @@
   ADR-0082's controller question and is not solved by a proxy -- a WebAuthn
   credential is RP-scoped, so no amount of forwarding makes one apex's
   ceremony valid at another's."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def ^:private issuer-url "https://authn.internal/v1/biscuit/token")
 
