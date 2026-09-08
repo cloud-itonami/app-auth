@@ -6,7 +6,7 @@
   That split is why `clojure -M:test` can check the parts most likely to be
   wrong — cookie attributes, redirect containment, what a credential record
   actually says — without a browser, an authenticator, or a deploy."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [itonami.auth.config :as config]))
 
 ;; ── cookies ─────────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@
       (str/starts-with? raw "/") raw
       :else
       (let [m (re-matches #"https://([A-Za-z0-9.-]+)(/.*)?" raw)
-            host (some-> m second str/lower-case)]
+            host (some-> m second str/lower)]
         (if (and host (or (= host config/cookie-domain)
                           (str/ends-with? host (str "." config/cookie-domain))))
           raw
@@ -106,8 +106,8 @@
     (when-let [[_ scheme host path]
                (re-matches #"(?i)(https?)://([A-Za-z0-9._~%!$&'()*+,;=:\[\]-]+)(/[^?#\s]*)?"
                            raw)]
-      (let [scheme (str/lower-case scheme)
-            bare-host (str/lower-case (str/replace host #":\d+$" ""))
+      (let [scheme (str/lower scheme)
+            bare-host (str/lower (str/replace host #":\d+$" ""))
             loopback? (contains? #{"localhost" "127.0.0.1" "[::1]"} bare-host)
             url (str scheme "://" host (or path ""))]
         (cond

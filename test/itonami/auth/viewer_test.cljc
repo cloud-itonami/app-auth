@@ -7,7 +7,7 @@
   padding, a clone baseline that could be lowered. They are cheap to check and
   expensive to discover in production, which is the whole reason the decisions
   live in `.cljc` and the mechanism does not."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [clojure.test :refer [deftest is testing]]
             [itonami.auth.config :as config]
             [itonami.auth.viewer :as viewer]))
