@@ -23,7 +23,7 @@
   Passkey is the only interactive sign-in route. The Worker also refuses the
   retired Email and upstream-SSO endpoints, so removing their controls here is
   not a presentation-only policy."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [itonami.auth.config :as config]))
 
 ;; ── base64url, the encoding every WebAuthn value crosses the wire in ────────

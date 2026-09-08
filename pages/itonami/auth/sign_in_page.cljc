@@ -38,7 +38,7 @@
   owner chose; written down so the next reader sees a decision rather than a
   bug."
   (:require [clojure.java.io :as io]
-            [clojure.string :as str]
+            [kotoba.lang.text :as str]
             [itonami.auth.config :as config]
             [jp-go-dds.core :as dds]
             [jp-go-dds.page :as page]

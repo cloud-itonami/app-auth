@@ -13,7 +13,7 @@
   entirely out of the Worker bundle (`scripts/render_pages.clj`).
 
   ClojureScript only."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [itonami.auth.config :as config]
             [itonami.auth.issuer :as issuer]
             [itonami.auth.oauth :as oauth]

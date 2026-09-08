@@ -47,7 +47,7 @@
   externs.
 
   ClojureScript only."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [itonami.auth.viewer :as viewer]
             [webauthn.adapters.edge :as edge]))
 

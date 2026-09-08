@@ -1,7 +1,7 @@
 (ns itonami.auth.oauth
   "Authorization Code + PKCE for the installed Cloud Itonami app. Codes and
   access tokens are opaque; only their SHA-256 digests reach storage."
-  (:require [clojure.string :as str]
+  (:require [kotoba.lang.text :as str]
             [itonami.auth.config :as config]
             [itonami.auth.store :as store]
             [itonami.auth.viewer :as viewer]))
