@@ -7,7 +7,12 @@
  ;; read-your-writes, no cron rotation sweep, no Durable Object) and states
  ;; that all three are "platform の差であって設計判断ではない". A Worker has
  ;; Durable Objects, so they stop being unfixable here.
- :deps {org.clojure/clojure {:mvn/version "1.12.0"}}
+ :deps {
+        ;; kotoba.lang.text, not clojure.string. Pinned as an explicit floor:
+        ;; tools.deps takes the NEWEST sha it is shown, so without a floor here
+        ;; this repo silently rides whatever a sibling happens to name.
+        io.github.kotoba-lang/text {:git/sha "73bdb13ae7a3d004b44bca08be03a3191157a38f"}
+       org.clojure/clojure {:mvn/version "1.12.0"}}
  :aliases
  {;; Worker + browser build classpath. Git coordinates, not :local/root, so a
   ;; pristine clone can build — which is what makes the deploy path honest:

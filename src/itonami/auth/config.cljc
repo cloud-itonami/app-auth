@@ -30,7 +30,7 @@
   `https://itonami.cloud`; a check written as `endsWith` admits it. Adding a
   door here is a decision someone makes on purpose, in a diff. The same set,
   for the same stated reason, is in `cloud-itonami.edge.webauthn`."
-  (:require [clojure.string :as str]))
+  (:require [kotoba.lang.text :as str]))
 
 (def rp-id
   "The WebAuthn Relying Party ID. See the namespace docstring: this is
