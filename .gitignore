@@ -23,3 +23,6 @@ js/
 resources/itonami/auth/app.js
 resources/itonami/auth/manifest.edn
 resources/itonami/auth/sign-in.html
+
+# nbb dependency cache -- a build artifact, not source
+.nbb/
