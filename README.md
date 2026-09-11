@@ -191,8 +191,8 @@ twice drifts — silently, and in production.
 ```bash
 npm install
 npm run build      # render the page -> compile the page script -> compile the Worker
-clojure -M:test    # the pure decisions, on the JVM
-nbb test/worker_smoke.cljs   # the BUILT artifact against an in-memory Cloudflare
+kbb -M:test    # the pure decisions, on the JVM
+kbb --backend sci test/worker_smoke.cljk   # the BUILT artifact against an in-memory Cloudflare
 npm run deploy     # builds, then uploads
 ```
 

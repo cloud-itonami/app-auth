@@ -6,15 +6,15 @@
   "description": "auth.itonami.cloud — Passkey and OAuth PKCE for the itonami app plane (CF Worker, ClojureScript).",
   "type": "module",
   "scripts": {
-    "pages": "clojure -M:render-pages",
-    "app": "shadow-cljs release browser",
-    "worker": "shadow-cljs release worker",
+    "pages": "kbb -M:render-pages",
+    "app": "amu compile --target wasm32-browser browser",
+    "worker": "amu compile --target wasm32-browser worker",
     "build": "npm run pages && npm run app && npm run worker",
     "dev": "wrangler dev",
     "deploy": "npm run build && wrangler deploy",
     "dry-run": "wrangler deploy --dry-run --outdir dist",
-    "test": "clojure -M:test",
-    "test:worker": "nbb test/worker_smoke.cljs",
+    "test": "kbb -M:test",
+    "test:worker": "kbb --backend sci test/worker_smoke.cljk",
     "check": "npm run build && npm run test && npm run test:worker"
   },
   "devDependencies": {

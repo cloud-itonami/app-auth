@@ -4,7 +4,7 @@
   since 2026-08-05.
 
   `render` produces `resources/itonami/auth/sign-in.html`; regenerate with
-  `clojure -M:render-pages`, then rebuild the Worker. The Worker inlines the
+  `kbb -M:render-pages`, then rebuild the Worker. The Worker inlines the
   file and performs exactly one runtime substitution, `{{RETURN_TO}}`.
 
   ## Authoring-only

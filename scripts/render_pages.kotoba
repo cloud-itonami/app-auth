@@ -7,7 +7,7 @@
   renders identically on every request has no reason to pay for a UI library
   in an isolate with a size limit.
 
-    clojure -M:render-pages"
+    kbb -M:render-pages"
   (:require [clojure.java.io :as io]
             [itonami.auth.sign-in-page :as sign-in]))
 
