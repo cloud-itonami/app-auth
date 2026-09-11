@@ -3,7 +3,7 @@
   clock read, no `fetch`, no Durable Object. Everything here is a pure
   function of values the Worker hands it.
 
-  That split is why `clojure -M:test` can check the parts most likely to be
+  That split is why `kbb -M:test` can check the parts most likely to be
   wrong — cookie attributes, redirect containment, what a credential record
   actually says — without a browser, an authenticator, or a deploy."
   (:require [kotoba.lang.text :as str]

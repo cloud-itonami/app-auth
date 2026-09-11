@@ -14,7 +14,7 @@
   two halves agree — the challenge the Worker issues is the record the object
   stores, and consuming it twice fails the second time.
 
-    npx nbb test/worker_smoke.cljs"
+    kbb --backend sci test/worker_smoke.cljk"
   (:require ["../js/auth-worker.js" :as worker]
             [kotoba.lang.text :as str]))
 

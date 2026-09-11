@@ -17,7 +17,7 @@
 ;; have that arity. Same shape (and same reason) as authn.durable.
 {:deps   {:aliases [:cljs]}
  :builds {:worker
-          ;; ⚠ `shadow-cljs release worker` EXITS 0 on an undeclared namespace.
+          ;; ⚠ `amu compile --target wasm32-browser worker` EXITS 0 on an undeclared namespace.
           ;;
           ;; Measured 2026-08-31: a `:require` that was never inserted produced
           ;; `No such namespace: issuer, could not locate issuer.cljs` and
