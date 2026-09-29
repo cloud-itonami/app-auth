@@ -5,7 +5,7 @@
 ;; script.
 ;;
 ;; The browser half is a compiled build and NOT a hand-written .js file. That
-;; is a workspace rule (CLAUDE.md: new .mjs/.cjs/.sh are prohibited; write
+;; is a workspace rule (AGENTS.md: new .mjs/.cjs/.sh are prohibited; write
 ;; nbb/ClojureScript), and it buys something concrete here: `itonami.auth.wire`
 ;; — the request/response shapes both halves speak — is one .cljc namespace
 ;; compiled into both, so the page and the Worker cannot drift apart in the
