@@ -1,5 +1,6 @@
 {
   "name": "itonami-app-auth",
+  "account_id": "4da88288dc30d9ee257f319d3c33ecf0",
   // The shadow-cljs :esm output directly — no generated shim needed.
   "main": "js/auth-worker.js",
   "compatibility_date": "2026-08-12",

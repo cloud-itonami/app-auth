@@ -1,4 +1,4 @@
-{:paths ["src" "resources"]
+{:paths ["src" "resources" "build/shadow-src"]
  ;; app.itonami.cloud/auth — the itonami app plane's sign-in surface.
  ;;
  ;; A Worker, not a Pages Function, and that is the whole point of the repo:

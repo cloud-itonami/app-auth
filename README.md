@@ -189,14 +189,16 @@ twice drifts — silently, and in production.
 ## Build and test
 
 ```bash
-npm install
+npm ci
 npm run build      # render the page -> compile the page script -> compile the Worker
 kbb -M:test    # the pure decisions, on the JVM
-kbb --backend sci test/worker_smoke.cljk   # the BUILT artifact against an in-memory Cloudflare
+npm run test:worker # the BUILT artifact against an in-memory Cloudflare
 npm run deploy     # builds, then uploads
 ```
 
-The order in `build` is load-bearing: the Worker inlines both the rendered
+The build first mirrors namespace-based `.kotoba` sources byte-for-byte into ignored
+`build/shadow-src/*.cljc` so Clojure and Shadow can resolve them. The order in
+`build` is load-bearing: the Worker inlines both the rendered
 document and the compiled script with `shadow.resource/inline`, so both must
 exist first.
 

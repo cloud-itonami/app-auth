@@ -1,0 +1,17 @@
+(ns prepare-shadow
+  "Byte-identical compatibility mirror for .kotoba S-expression sources.
+  Generated .cljc files are build artifacts; original sources remain canonical."
+  (:require ["node:fs" :as fs] ["node:path" :as path]))
+(def root "build/shadow-src")
+(defn walk [dir]
+  (when (fs/existsSync dir)
+    (doseq [entry (fs/readdirSync dir #js {:withFileTypes true})]
+      (let [file (path/join dir (.-name entry))]
+        (cond (.isDirectory entry) (walk file)
+              (.endsWith file ".kotoba")
+              (let [relative (path/relative (first (.split file path/sep)) file)
+                    out (path/join root (str (subs relative 0 (- (count relative) 7)) ".cljc"))]
+                (fs/mkdirSync (path/dirname out) #js {:recursive true})
+                (fs/copyFileSync file out)))))))
+(doseq [dir ["src" "browser" "pages" "scripts" "test"]] (walk dir))
+(println "Prepared canonical source mirror")
