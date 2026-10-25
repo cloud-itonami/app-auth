@@ -40,15 +40,17 @@
                 ;; credential actually proves. This repo verifies ceremonies;
                 ;; it does not re-derive how.
                 io.github.kotoba-lang/webauthn
-                {:git/url "https://github.com/kotoba-lang/webauthn.git"
-                 :git/sha "15b2610652390298b5009697c9efba61e0745911"}
+        {:git/url "https://github.com/kotoba-lang/kotoba.git"
+         :git/sha "3dfb77e29a541416bfd6a39aee202ab770ddf952"
+         :deps/root "lib/kotoba.webauthn"}
                 ;; authentication.identity/session-record — the session shape
                 ;; (opaque token, only its SHA-256 digest ever stored). Shared
                 ;; so the itonami app plane and authn.kotobase.net describe a
                 ;; session with one vocabulary.
                 io.github.kotoba-lang/authentication
-                {:git/url "https://github.com/kotoba-lang/authentication.git"
-                 :git/sha "fe03e31c38c36f70e8f1484221e0c6e0d9dea925"}}}
+        {:git/url "https://github.com/kotoba-lang/kotoba.git"
+         :git/sha "3dfb77e29a541416bfd6a39aee202ab770ddf952"
+         :deps/root "lib/kotoba.authentication"}}}
 
   ;; Build-time page rendering (scripts/render_pages.clj). The design system
   ;; is scoped here and never reaches the Worker bundle: a shell that renders
@@ -57,8 +59,9 @@
   :render-pages
   {:extra-paths ["pages" "scripts"]
    :extra-deps {io.github.kotoba-lang/jp-go-digital-design-system
-                {:git/url "https://github.com/kotoba-lang/jp-go-digital-design-system.git"
-                 :git/sha "0a0218052b0d563057341a1c2ab310045052bd23"}}
+        {:git/url "https://github.com/kotoba-lang/kotoba.git"
+         :git/sha "3dfb77e29a541416bfd6a39aee202ab770ddf952"
+         :deps/root "lib/kotoba.jpGoDigitalDesignSystem"}}
    :main-opts ["-m" "render-pages"]}
 
   ;; Pure-core tests on the JVM: cookies, viewer payload, return_to
