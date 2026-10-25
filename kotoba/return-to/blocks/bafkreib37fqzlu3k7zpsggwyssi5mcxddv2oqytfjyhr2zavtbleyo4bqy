@@ -1,0 +1,55 @@
+(ns itonami.auth.return-to
+  (:export [safe-return-to]))
+
+(defn- prefix-at? [text :string prefix :string index :i64] :bool
+  (if (= index (string-byte-length prefix))
+    true
+    (if (= (string-code-point-at text index)
+           (string-code-point-at prefix index))
+      (prefix-at? text prefix (+ index 1))
+      false)))
+
+(defn- starts-with? [text :string prefix :string] :bool
+  (let [prefix-length (string-byte-length prefix)]
+    (and (<= prefix-length (string-byte-length text))
+         (prefix-at? text prefix 0))))
+
+(defn- host-char? [code :i64] :bool
+  (or (and (<= 48 code) (<= code 57))
+      (and (<= 65 code) (<= code 90))
+      (and (<= 97 code) (<= code 122))
+      (= code 45)
+      (= code 46)))
+
+(defn- host-end [text :string index :i64] :i64
+  (if (= index (string-byte-length text))
+    index
+    (let [code (string-code-point-at text index)]
+      (if (= code 47)
+        index
+        (if (host-char? code)
+          (host-end text (+ index 1))
+          -1)))))
+
+(defn- accepted-host? [host :string] :bool
+  (let [host-length (string-byte-length host)
+        lower-host (string-fold-ascii host)]
+    (and (> host-length 0)
+         (or (string=? lower-host "itonami.cloud")
+             (and (> host-length 14)
+                  (string=? (string-substring lower-host (- host-length 14) host-length)
+                            ".itonami.cloud"))))))
+
+(defn safe-return-to [raw :string] :string
+  (if (starts-with? raw "//")
+    "/"
+    (if (starts-with? raw "/")
+      raw
+      (if (starts-with? raw "https://")
+        (let [host-start 8
+              end (host-end raw host-start)]
+          (if (= end -1)
+            "/"
+            (let [host (string-substring raw host-start end)]
+              (if (accepted-host? host) raw "/"))))
+        "/"))))

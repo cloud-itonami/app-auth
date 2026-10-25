@@ -9,6 +9,7 @@
     "pages": "kbb -M:render-pages",
     "app": "amu compile --target wasm32-browser browser",
     "worker": "amu compile --target wasm32-browser worker",
+    "build:selfhost:return-to": "node scripts/build-return-to-selfhost.mjs",
     "build": "npm run pages && npm run app && npm run worker",
     "dev": "wrangler dev",
     "deploy": "npm run build && wrangler deploy",
